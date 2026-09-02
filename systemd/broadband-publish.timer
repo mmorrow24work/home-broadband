@@ -1,0 +1,13 @@
+[Unit]
+Description=Publish broadband results hourly
+
+[Timer]
+OnBootSec=5min
+OnCalendar=hourly
+RandomizedDelaySec=120
+AccuracySec=1min
+Persistent=true
+Unit=broadband-publish.service
+
+[Install]
+WantedBy=timers.target

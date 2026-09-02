@@ -1,0 +1,23 @@
+[Unit]
+Description=Apply the broadband database retention policy
+Documentation=https://github.com/mmorrow24work/home-broadband
+
+[Service]
+Type=oneshot
+User=broadband
+Group=broadband
+WorkingDirectory=/opt/broadband-monitor
+Environment=BROADBAND_CONFIG=/etc/broadband-monitor/config.yaml
+ExecStart=/opt/broadband-monitor/.venv/bin/python -m collector.main prune
+TimeoutStartSec=900
+Nice=15
+IOSchedulingClass=idle
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/broadband-monitor
+
+[Install]
+WantedBy=multi-user.target

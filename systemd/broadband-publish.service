@@ -1,0 +1,33 @@
+[Unit]
+Description=Publish broadband results to GitHub Pages
+Documentation=https://github.com/mmorrow24work/home-broadband
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=broadband
+Group=broadband
+WorkingDirectory=/opt/broadband-monitor
+Environment=BROADBAND_CONFIG=/etc/broadband-monitor/config.yaml
+# MUST stay double-quoted: systemd reads Environment= as a space-separated list
+# of assignments, so an unquoted value collapses to GIT_SSH_COMMAND=ssh and every
+# option after it is silently discarded. The visible symptom is
+# "Host key verification failed", because StrictHostKeyChecking never gets set.
+Environment="GIT_SSH_COMMAND=ssh -i /var/lib/broadband-monitor/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/broadband-monitor/.ssh/known_hosts"
+ExecStart=/opt/broadband-monitor/.venv/bin/python -m collector.main publish
+TimeoutStartSec=600
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/broadband-monitor /opt/broadband-monitor
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

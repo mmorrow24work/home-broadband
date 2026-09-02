@@ -1,0 +1,18 @@
+[project]
+name = "home-broadband"
+version = "1.0.0"
+description = "24/7 home broadband throughput, latency and packet-loss monitoring for a Raspberry Pi"
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=6.0", "requests>=2.31", "dnspython>=2.4"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["B008", "SIM108"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

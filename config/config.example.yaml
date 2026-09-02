@@ -1,0 +1,243 @@
+# ---------------------------------------------------------------------------
+# home-broadband — collector configuration
+#
+# Copy to /etc/broadband-monitor/config.yaml and edit.
+# Every value below is the built-in default unless marked CHANGE ME.
+# ---------------------------------------------------------------------------
+
+site:
+  # Shown as the dashboard heading.
+  title: "Home Broadband Monitor"
+  subtitle: "Coventry, UK"
+  # Custom domain for GitHub Pages. Written verbatim to the CNAME file on the
+  # published branch. Leave empty ("") to use the default *.github.io URL.
+  domain: "home-broadband.coldwire.uk"   # CHANGE ME (or set to "")
+  # IANA timezone used for day bucketing and axis labels.
+  timezone: "Europe/London"
+  # Your ISP / package details — used for the SLA panel on the dashboard.
+  isp:
+    name: ""                       # e.g. "Community Fibre" — blank = auto-detect from speed tests
+    package: ""                    # e.g. "500 Mbps Full Fibre"
+    advertised_down_mbps: 500      # CHANGE ME — headline "average" speed sold to you
+    advertised_up_mbps: 70         # CHANGE ME
+    # Ofcom Broadband Speed Code of Practice: the "guaranteed minimum" figure
+    # your ISP gave you at point of sale. If your speed sits below this and
+    # they cannot fix it within 30 days you can exit the contract penalty-free.
+    guaranteed_min_down_mbps: 250  # CHANGE ME
+    target_max_ping_ms: 25
+
+database:
+  path: "/var/lib/broadband-monitor/broadband.db"
+  # Delete raw samples older than this. Published JSON is unaffected.
+  # 0 disables pruning.
+  retention_days: 1095
+
+# ---------------------------------------------------------------------------
+# Latency / reachability probing — cheap, runs continuously.
+# ---------------------------------------------------------------------------
+latency:
+  interval_seconds: 60      # how often the timer fires (see systemd/*.timer)
+  count: 5                  # ICMP echoes per probe
+  ping_interval: 0.25       # seconds between echoes (needs root below 0.2)
+  timeout_seconds: 6        # per-probe deadline
+  parallel: 8               # how many targets to probe concurrently
+
+  # DNS check settings (only applied to targets listing "dns" in checks).
+  dns:
+    resolvers: ["1.1.1.1", "8.8.8.8"]
+    record: "A"
+    timeout_seconds: 3
+
+  # HTTP check settings (only applied to targets listing "http" in checks).
+  http:
+    timeout_seconds: 10
+    user_agent: "home-broadband-monitor/1.0"
+
+  # ---- the configurable target list -------------------------------------
+  # name    : label on the dashboard (must be unique)
+  # host    : hostname or literal IP
+  # family  : auto | ipv4 | ipv6      (default auto)
+  # group   : lan | isp | internet | custom — used for grouping/colours
+  # checks  : any of [icmp, dns, http]
+  # url     : required when "http" is in checks
+  # expect_status : which HTTP codes count as healthy. Default 200-399. Accepts
+  #           an int, a "NNN-NNN" range, or a list of either. Needed for
+  #           endpoints that answer an unauthenticated probe with 401/403/404.
+  # primary : true on exactly one target — drives the big "current ping" tile
+  targets:
+    - name: "Router"
+      host: "192.168.1.1"          # CHANGE ME if your gateway differs
+      group: "lan"
+      checks: [icmp]
+
+    - name: "ISP gateway"
+      host: "1.1.1.1"
+      group: "isp"
+      checks: [icmp]
+      primary: true
+
+    - name: "Google DNS"
+      host: "8.8.8.8"
+      group: "internet"
+      checks: [icmp]
+
+    - name: "Quad9"
+      host: "9.9.9.9"
+      group: "internet"
+      checks: [icmp]
+
+    - name: "Cloudflare v6"
+      host: "2606:4700:4700::1111"
+      family: ipv6
+      group: "internet"
+      checks: [icmp]
+
+    - name: "BBC"
+      host: "www.bbc.co.uk"
+      group: "internet"
+      checks: [icmp, dns, http]
+      url: "https://www.bbc.co.uk/"
+
+    - name: "GitHub"
+      host: "github.com"
+      group: "internet"
+      checks: [dns, http]
+      url: "https://github.com/"
+
+    - name: "Coventry City FC"
+      host: "www.ccfc.co.uk"
+      group: "custom"
+      checks: [dns, http]
+      url: "https://www.ccfc.co.uk/"
+
+    # ---- services you actually depend on ----------------------------------
+    # Both of these answer an unauthenticated request with a non-2xx code that
+    # still proves the edge is reachable: api.anthropic.com returns 404 at "/",
+    # and claude.ai returns 403 to a bare request from Cloudflare's bot check.
+    # expect_status accepts those while still flagging 5xx and edge errors
+    # (521/522/523/530), which are what a real outage looks like.
+    #
+    # Verify ICMP works from your Pi before adding it to checks:
+    #   ping -c3 api.anthropic.com
+    # If it does not answer, use [dns, http] only — otherwise the packet-loss
+    # chart shows a permanent 100% line for that target.
+
+    - name: "Claude API"                  # what Claude Code talks to
+      host: "api.anthropic.com"
+      group: "custom"
+      checks: [dns, http]
+      url: "https://api.anthropic.com/"
+      expect_status: [200, 400, 401, 403, 404, 405]
+
+    - name: "Claude"                      # claude.ai — the app and Cowork
+      host: "claude.ai"
+      group: "custom"
+      checks: [dns, http]
+      url: "https://claude.ai/"
+      expect_status: [200, 400, 401, 403, 404, 405]
+
+    - name: "Claude status page"
+      host: "status.claude.com"
+      group: "custom"
+      checks: [dns, http]
+      # Statuspage's JSON API returns a clean 200 and is cheap to fetch.
+      url: "https://status.claude.com/api/v2/status.json"
+
+# ---------------------------------------------------------------------------
+# Throughput testing — expensive. Read the data-usage note in the README.
+# ---------------------------------------------------------------------------
+speed:
+  # Throughput tests move real data. On a 500 Mbps line an Ookla run costs about
+  # 0.85 GB and a Cloudflare run about 0.35 GB, so hourly alternating tests are
+  # roughly 14 GB/day. Halve this to 30 for a denser chart and double the bill —
+  # keep systemd/broadband-speed.timer in step. See README § Data usage.
+  interval_minutes: 60
+
+  # Engines alternate round-robin across runs, so each listed engine runs every
+  # (interval_minutes x len(engines)) minutes. Three engines at 60 minutes means
+  # each one tests every three hours.
+  #
+  #   ookla         official Ookla CLI. The number an ISP will accept, and the
+  #                 only one that produces a speedtest.net result URL. Needs
+  #                 Ookla's apt repo — no armhf packages, so 32-bit Pi OS
+  #                 cannot use it (see docs/INSTALL.md).
+  #   speedtest-cli Debian's python client: `sudo apt install speedtest-cli`.
+  #                 Installs anywhere, also hits speedtest.net, but is
+  #                 CPU-bound on a Pi and under-reports above ~200 Mbps.
+  #   cloudflare    no install at all, measured against Cloudflare's edge.
+  #
+  # Drop any you do not have installed — a missing binary is recorded as a
+  # failed test, not a crash, but it clutters the chart.
+  engines: [ookla, speedtest-cli, cloudflare]
+
+  # Hard guard: skip a run once the day's cumulative test traffic exceeds this.
+  # Set to 0 to disable. Sized for the interval above with headroom.
+  max_daily_gb: 20
+
+  # Skip throughput tests during these local-time hours (inclusive start,
+  # exclusive end). Empty list = always test. Useful if the Pi shares the line
+  # with people who notice a saturated uplink.
+  quiet_hours: []       # e.g. [{start: "19:00", end: "22:00"}]
+
+  ookla:
+    binary: "speedtest"      # the official Ookla CLI
+    server_id: null          # pin a server id for consistency, or null = auto
+    extra_args: []
+
+  speedtest-cli:
+    binary: "speedtest-cli"  # Debian's python client — a different program
+    server_id: null          # pin with a server id from `speedtest-cli --list`
+    # Bind the test to a local address. Its main use is forcing IPv4: an IPv6
+    # prefix is often geolocated worse than the IPv4 one, and speedtest.net then
+    # offers only servers in the wrong country. Set your LAN IPv4 here and
+    # re-check `speedtest-cli --source <that ip> --list`.
+    source_ip: null
+    secure: true             # HTTPS to the test server
+    no_pre_allocate: true    # do not buffer the whole upload in RAM (Pi-friendly)
+    single: false            # true = one connection instead of several
+    share: false             # true = upload the result and store a share URL
+    timeout_seconds: 30
+    extra_args: []
+
+  cloudflare:
+    streams: 4
+    # Each direction stops at whichever comes first: bytes or duration.
+    download_bytes: 250000000
+    upload_bytes: 100000000
+    duration_seconds: 12
+
+# ---------------------------------------------------------------------------
+# Publishing to GitHub Pages.
+# ---------------------------------------------------------------------------
+publish:
+  enabled: true
+  interval_minutes: 60
+
+  # SSH remote of your repo. Use SSH + a deploy key with write access.
+  remote: "git@github.com:mmorrow24work/home-broadband.git"   # CHANGE ME
+  branch: "gh-pages"
+
+  # Where this repo is checked out on the Pi (source of site/ assets).
+  repo_dir: "/opt/broadband-monitor"
+  # Scratch clone the publisher pushes from.
+  work_dir: "/var/lib/broadband-monitor/pages"
+
+  # Keep the published branch at exactly one commit and force-push it.
+  # The Pi's SQLite file is the source of truth, so published history has no
+  # value — this keeps the repo permanently small. Set false to keep history.
+  squash: true
+
+  # git pull the code repo before each publish so a push to main updates the
+  # live site within one publish interval.
+  sync_code: true
+
+  # Aggregation resolution for archived days (seconds). 300 = 5-minute buckets.
+  bucket_seconds: 300
+  # The dashboard's default view is served at full resolution for this window.
+  latest_hours: 48
+  # Daily files older than this are dropped from the published set (they stay
+  # in SQLite). Monthly rollups are always kept.
+  keep_daily_days: 400
+
+  git_user_name: "broadband-monitor"
+  git_user_email: "broadband-monitor@users.noreply.github.com"

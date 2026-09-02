@@ -1,0 +1,28 @@
+[Unit]
+Description=Broadband throughput test (Ookla / Cloudflare, alternating)
+Documentation=https://github.com/mmorrow24work/home-broadband
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=broadband
+Group=broadband
+WorkingDirectory=/opt/broadband-monitor
+Environment=BROADBAND_CONFIG=/etc/broadband-monitor/config.yaml
+ExecStart=/opt/broadband-monitor/.venv/bin/python -m collector.main speed
+TimeoutStartSec=300
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/broadband-monitor
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

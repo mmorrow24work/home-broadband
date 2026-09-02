@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Patch files downloaded while updating — not part of the project
+*.patch
+
+# Local runtime state — never commit
+*.db
+*.db-wal
+*.db-shm
+config/config.yaml
+site/data/*
+!site/data/.gitkeep
+.publish-work/

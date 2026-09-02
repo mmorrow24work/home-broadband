@@ -1,0 +1,11 @@
+[Unit]
+Description=Prune old broadband samples daily
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=broadband-prune.service
+
+[Install]
+WantedBy=timers.target

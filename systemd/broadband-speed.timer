@@ -1,0 +1,16 @@
+[Unit]
+Description=Run a broadband throughput test every hour
+
+[Timer]
+OnBootSec=3min
+# *:00/30 for every 30 minutes, *:00/15 for every 15. Each step up doubles the
+# data consumed — keep this in step with speed.interval_minutes in config.yaml.
+OnCalendar=hourly
+# Avoids every monitor on the internet testing exactly on the hour.
+RandomizedDelaySec=300
+AccuracySec=30s
+Persistent=false
+Unit=broadband-speed.service
+
+[Install]
+WantedBy=timers.target
