@@ -1,0 +1,226 @@
+/* home-broadband dashboard
+   Palette: the validated reference instance (see docs/DESIGN.md).
+   Light values on :root; dark values declared under BOTH the OS media query and
+   the [data-theme="dark"] scope so the toggle wins in either direction. */
+
+:root {
+  color-scheme: light;
+
+  --surface-1: #fcfcfb;      /* chart surface  */
+  --plane:     #f9f9f7;      /* page plane     */
+  --ink-1:     #0b0b0b;
+  --ink-2:     #52514e;
+  --ink-muted: #898781;
+  --grid:      #e1e0d9;
+  --axis:      #c3c2b7;
+  --border:    rgba(11, 11, 11, 0.10);
+
+  --series-1: #2a78d6;  /* blue    */
+  --series-2: #eb6834;  /* orange  */
+  --series-3: #1baf7a;  /* aqua    */
+  --series-4: #eda100;  /* yellow  */
+  --series-5: #e87ba4;  /* magenta */
+  --series-6: #008300;  /* green   */
+  --series-7: #4a3aa7;  /* violet  */
+  --series-8: #e34948;  /* red     */
+
+  --good:     #0ca30c;
+  --warning:  #fab219;
+  --serious:  #ec835a;
+  --critical: #d03b3b;
+
+  --radius: 10px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane:     #0d0d0d;
+    --ink-1:     #ffffff;
+    --ink-2:     #c3c2b7;
+    --ink-muted: #898781;
+    --grid:      #2c2c2a;
+    --axis:      #383835;
+    --border:    rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --plane:     #0d0d0d;
+  --ink-1:     #ffffff;
+  --ink-2:     #c3c2b7;
+  --ink-muted: #898781;
+  --grid:      #2c2c2a;
+  --axis:      #383835;
+  --border:    rgba(255, 255, 255, 0.10);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-1);
+  background: var(--plane);
+  -webkit-font-smoothing: antialiased;
+}
+
+main { max-width: 1180px; margin: 0 auto; padding: 0 20px 56px; }
+
+h1 { font-size: 1.4rem; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 1.02rem; margin: 0; letter-spacing: -0.005em; }
+p  { margin: 0; }
+a  { color: var(--series-1); }
+
+.muted { color: var(--ink-2); font-size: 0.85rem; }
+.footnote { color: var(--ink-muted); font-size: 0.78rem; margin-top: 14px; max-width: 76ch; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: flex-end; justify-content: space-between;
+  max-width: 1180px; margin: 0 auto; padding: 26px 20px 18px;
+}
+.topbar-side { display: flex; align-items: center; gap: 12px; }
+
+.ghost-btn {
+  font: inherit; font-size: 0.82rem; color: var(--ink-2);
+  background: transparent; border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 12px; cursor: pointer;
+}
+.ghost-btn:hover { background: var(--surface-1); color: var(--ink-1); }
+
+/* ---------- stat tiles ---------- */
+.tiles {
+  display: grid; gap: 12px; margin-bottom: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+}
+.tile {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px;
+}
+.tile-label {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+.tile-value { font-size: 1.85rem; font-weight: 600; line-height: 1.15; margin-top: 4px; }
+.tile-value .unit { font-size: 0.82rem; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
+.tile-sub { font-size: 0.78rem; color: var(--ink-2); margin-top: 3px; }
+.tile-status { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; margin-top: 4px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.s-good     { color: var(--good); }     .s-good .dot     { background: var(--good); }
+.s-warning  { color: #8a6100; }         .s-warning .dot  { background: var(--warning); }
+.s-critical { color: var(--critical); } .s-critical .dot { background: var(--critical); }
+:root[data-theme="dark"] .s-warning { color: var(--warning); }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .s-warning { color: var(--warning); }
+}
+
+/* ---------- panels ---------- */
+.panel {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px 18px; margin-bottom: 16px;
+}
+.chart-head { margin-bottom: 10px; }
+.chart { width: 100%; min-height: 260px; }
+
+.banner {
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border-radius: 0 6px 6px 0;
+  padding: 10px 14px; margin: 10px 0 16px;
+  font-size: 0.84rem; color: var(--ink-1); max-width: 84ch;
+}
+
+.sla-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.sla-item { border-left: 3px solid var(--border); padding-left: 12px; }
+.sla-item strong { display: block; font-size: 1.3rem; font-weight: 600; }
+.bar { height: 6px; border-radius: 3px; background: var(--grid); margin-top: 8px; overflow: hidden; }
+.bar > span { display: block; height: 100%; border-radius: 3px; background: var(--series-1); }
+
+/* ---------- controls ---------- */
+.controls {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 10px 16px; margin: 22px 0 14px;
+}
+.range-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.range-buttons button {
+  font: inherit; font-size: 0.85rem; padding: 6px 13px; cursor: pointer;
+  color: var(--ink-2); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.range-buttons button:hover { color: var(--ink-1); }
+.range-buttons button.active {
+  background: var(--ink-1); border-color: var(--ink-1);
+  color: var(--surface-1); font-weight: 500;
+}
+
+/* ---------- legend ---------- */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 8px; }
+.legend-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.82rem; color: var(--ink-2); cursor: pointer;
+  background: none; border: 0; padding: 2px 0; font-family: inherit;
+}
+.legend-item .swatch { width: 12px; height: 3px; border-radius: 2px; flex: none; }
+.legend-item[aria-pressed="false"] { opacity: 0.38; text-decoration: line-through; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td {
+  text-align: left; padding: 7px 12px 7px 0;
+  border-bottom: 1px solid var(--grid); white-space: nowrap;
+}
+th { color: var(--ink-muted); font-weight: 500; font-size: 0.74rem;
+     text-transform: uppercase; letter-spacing: 0.05em; }
+td { font-variant-numeric: tabular-nums; }
+td.num, th.num { text-align: right; padding-right: 18px; }
+tbody tr:last-child td { border-bottom: 0; }
+.empty { padding: 6px 0; }
+
+/* ---------- tooltip ---------- */
+.tooltip {
+  position: fixed; z-index: 20; pointer-events: none;
+  background: var(--surface-1); color: var(--ink-1);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 0.8rem; line-height: 1.45;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); max-width: 280px;
+}
+.tooltip .tt-time { color: var(--ink-muted); font-size: 0.74rem; margin-bottom: 4px; }
+.tooltip .tt-row { display: flex; align-items: center; gap: 7px; }
+.tooltip .tt-row .swatch { width: 10px; height: 3px; border-radius: 2px; flex: none; }
+.tooltip .tt-row .tt-val { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* ---------- uPlot chrome ---------- */
+.u-legend { display: none; }
+.u-select { background: rgba(42, 120, 214, 0.12); }
+
+footer { max-width: 1180px; margin: 0 auto; padding: 0 20px 40px; }
+
+@media (max-width: 640px) {
+  .tile-value { font-size: 1.5rem; }
+  main, .topbar, footer { padding-left: 14px; padding-right: 14px; }
+}
