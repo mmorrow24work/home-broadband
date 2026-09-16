@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home Broadband Monitor</title>
+<meta name="description" content="Continuous broadband throughput, latency and packet-loss monitoring.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128225;</text></svg>">
+</head>
+<body data-palette="#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4,#008300,#4a3aa7,#e34948">
+
+<header class="topbar">
+  <div class="topbar-main">
+    <h1 id="site-title">Home Broadband Monitor</h1>
+    <p id="site-subtitle" class="muted"></p>
+  </div>
+  <div class="topbar-side">
+    <p class="muted" id="generated">Loading…</p>
+    <button id="theme-toggle" type="button" class="ghost-btn" aria-label="Toggle colour theme">
+      <span aria-hidden="true">◐</span> Theme
+    </button>
+  </div>
+</header>
+
+<main>
+  <section id="tiles" class="tiles" aria-label="Current status"></section>
+
+  <section class="panel" id="sla-panel" hidden>
+    <h2>Against what you pay for</h2>
+    <p id="sla-banner" class="banner" hidden></p>
+    <div id="sla-body" class="sla-grid"></div>
+    <p class="footnote">
+      Under Ofcom's Broadband Speed Code of Practice your provider must give a
+      guaranteed minimum download speed. If measured speed sits below it and they
+      cannot fix it within 30 days, you can normally exit the contract without penalty.
+      These figures are wired-to-router measurements from a Raspberry Pi; Wi-Fi speeds
+      will be lower and are not evidence of a line fault.
+    </p>
+  </section>
+
+  <div class="controls" role="group" aria-label="Time range">
+    <div class="range-buttons" id="range-buttons">
+      <button type="button" data-range="24h" class="active">24 hours</button>
+      <button type="button" data-range="48h">48 hours</button>
+      <button type="button" data-range="7d">7 days</button>
+      <button type="button" data-range="30d">30 days</button>
+      <button type="button" data-range="all">All time</button>
+    </div>
+    <p class="muted" id="range-note"></p>
+  </div>
+
+  <section class="panel chart-panel">
+    <div class="chart-head">
+      <h2>Throughput</h2>
+      <p class="muted">Megabits per second, measured by alternating Ookla and Cloudflare tests.</p>
+    </div>
+    <div class="legend" id="legend-speed"></div>
+    <div class="chart" id="chart-speed"></div>
+  </section>
+
+  <section class="panel chart-panel">
+    <div class="chart-head">
+      <h2>Round-trip latency</h2>
+      <p class="muted">Mean ICMP round-trip time per target. <span id="latency-note"></span></p>
+    </div>
+    <div class="legend" id="legend-latency"></div>
+    <div class="chart" id="chart-latency"></div>
+  </section>
+
+  <section class="panel chart-panel">
+    <div class="chart-head">
+      <h2>Packet loss</h2>
+      <p class="muted">Percentage of ICMP echoes unanswered per probe.</p>
+    </div>
+    <div class="legend" id="legend-loss"></div>
+    <div class="chart" id="chart-loss"></div>
+  </section>
+
+  <section class="panel chart-panel" id="ttfb-panel" hidden>
+    <div class="chart-head">
+      <h2>Web response time</h2>
+      <p class="muted">Time to first byte over HTTPS.</p>
+    </div>
+    <div class="legend" id="legend-ttfb"></div>
+    <div class="chart" id="chart-ttfb"></div>
+  </section>
+
+  <section class="panel">
+    <div class="chart-head">
+      <h2>Outages</h2>
+      <p class="muted">Every non-LAN target unreachable in the same probe sweep.</p>
+    </div>
+    <div class="table-wrap"><table id="outages-table"><thead><tr>
+      <th scope="col">Started</th><th scope="col">Ended</th><th scope="col">Duration</th>
+    </tr></thead><tbody></tbody></table></div>
+    <p class="muted empty" id="outages-empty" hidden>No outages recorded in this window.</p>
+  </section>
+
+  <section class="panel">
+    <div class="chart-head">
+      <h2>Recent tests</h2>
+      <p class="muted">The 20 most recent throughput results behind the chart above.</p>
+    </div>
+    <div class="table-wrap"><table id="tests-table"><thead><tr>
+      <th scope="col">Time</th><th scope="col">Engine</th>
+      <th scope="col" class="num">Down</th><th scope="col" class="num">Up</th>
+      <th scope="col" class="num">Ping</th><th scope="col" class="num">Jitter</th>
+      <th scope="col">Server</th><th scope="col">Result</th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="panel" id="targets-panel">
+    <div class="chart-head">
+      <h2>Monitored targets</h2>
+      <p class="muted">Edit <code>config.yaml</code> on the Pi to change this list.</p>
+    </div>
+    <div class="table-wrap"><table id="targets-table"><thead><tr>
+      <th scope="col">Name</th><th scope="col">Host</th>
+      <th scope="col">Group</th><th scope="col">Checks</th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+</main>
+
+<footer>
+  <p class="muted">
+    Collected on a Raspberry Pi by
+    <a href="https://github.com/mmorrow24work/home-broadband">home-broadband</a>.
+    Data refreshes when the Pi publishes — see the timestamp at the top of the page.
+  </p>
+</footer>
+
+<div id="tooltip" class="tooltip" hidden></div>
+
+<script src="vendor/uPlot.iife.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
