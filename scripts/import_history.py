@@ -140,8 +140,10 @@ def insert_ignore(conn: sqlite3.Connection, table: str, rows: list[dict]) -> int
 
 
 def merge_db(conn: sqlite3.Connection, source: Path) -> dict[str, int]:
-    # as_uri(): file:///C:/... on Windows; a bare file:C:\... is not a valid URI.
-    conn.execute("ATTACH DATABASE ? AS old", (f"{Path(source).resolve().as_uri()}?mode=ro",))
+    # A plain path, not a file: URI. URIs in ATTACH only work when the
+    # connection was opened with uri=True (Debian's Python enables them
+    # everywhere; Windows' does not). Only SELECTs touch "old".
+    conn.execute("ATTACH DATABASE ? AS old", (str(Path(source).resolve()),))
     counts = {}
     try:
         for table in TABLES:
