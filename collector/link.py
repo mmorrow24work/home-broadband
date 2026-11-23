@@ -62,6 +62,18 @@ def parse_default_routes(text: str) -> str | None:
     return best[2] if best else None
 
 
+def parse_default_gateway(text: str) -> str | None:
+    """The next hop of the route parse_default_routes picks, if it has one."""
+    dev = parse_default_routes(text)
+    for line in text.splitlines():
+        parts = line.split()
+        if "linkdown" in parts or "via" not in parts or "dev" not in parts:
+            continue
+        if parts[parts.index("dev") + 1] == dev:
+            return parts[parts.index("via") + 1]
+    return None
+
+
 def _linux_default_interface() -> str | None:
     try:
         proc = subprocess.run(
@@ -199,6 +211,28 @@ def connection_type(interface: str | None = None) -> str | None:
     if not interface:
         return None
     return "wifi" if (SYS_NET / interface / "wireless").exists() else "wired"
+
+
+_PS_GATEWAY = (
+    "(Find-NetRoute -RemoteIPAddress 1.1.1.1 | Where-Object NextHop | "
+    "Select-Object -First 1).NextHop"
+)
+
+
+def default_gateway() -> str | None:
+    """The router this machine actually uses, e.g. '192.168.1.5'."""
+    if IS_WINDOWS:
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_GATEWAY]
+    else:
+        cmd = ["ip", "-o", "route", "show", "default"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if IS_WINDOWS:
+        hop = proc.stdout.strip()
+        return hop if hop and hop not in ("0.0.0.0", "::") else None
+    return parse_default_gateway(proc.stdout)
 
 
 # DMI strings that boards ship unfilled; never worth showing.

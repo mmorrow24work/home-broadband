@@ -373,33 +373,72 @@ systemctl enable --now broadband-latency.timer broadband-speed.timer \
                         broadband-publish.timer broadband-prune.timer
 
 say "Done."
-cat <<EOF
 
-Next steps
-----------
-1. Edit the config:            sudo nano $CONF_DIR/config.yaml
-     - publish.remote          your repo's SSH URL
-     - site.domain             your custom domain (or "")
-     - latency.targets         your gateway IP and the hosts you care about
-     - site.isp.*              advertised and guaranteed speeds
+# Ask the collector what is actually left to do, so a re-run does not repeat
+# first-run instructions finished long ago. Lines are "<step><TAB><detail>".
+# If the check itself fails, show every step.
+TODO="$(cd "$APP_DIR" && sudo -u "$SERVICE_USER" "$APP_DIR/.venv/bin/python" -m collector.main \
+  --config "$CONF_DIR/config.yaml" setup-check 2>/dev/null)" || TODO=""
+[[ -n "$TODO" ]] || TODO=$'config\t\nkey\t\npages\t\nsmoke\t'
+has_step() { grep -q "^$1"$'\t' <<<"$TODO"; }
+detail()   { grep "^$1"$'\t' <<<"$TODO" | cut -f2-; }
 
-2. Add this deploy key to the repo with **write access**
+if has_step ok; then
+  echo
+  echo "Nothing left to set up."
+  [[ -n "$(detail ok)" ]] && echo "Live at $(detail ok) — publishing every 20 minutes."
+  echo "Check on it:  systemctl list-timers 'broadband-*'"
+else
+  printf '\nNext steps\n----------\n'
+  n=0
+  if has_step config; then
+    n=$((n + 1))
+    echo "$n. Edit the config:            sudo nano $CONF_DIR/config.yaml"
+    if [[ -n "$(detail config | tr -d '[:space:]')" ]]; then
+      detail config | sed '/^$/d; s/^/     - /'
+    else
+      echo "     - publish.remote, site.domain, latency.targets (your gateway), site.isp.*"
+    fi
+    echo
+  fi
+  if has_step key; then
+    n=$((n + 1))
+    cat <<EOF
+$n. Add this deploy key to the repo with **write access**
    (Settings -> Deploy keys -> Add deploy key -> tick "Allow write access"):
 
 $(cat "${KEY}.pub")
 
-3. In the repo: Settings -> Pages -> Source = "Deploy from a branch",
-   branch "gh-pages", folder "/ (root)".
+EOF
+    [[ $NEW_KEY -eq 1 ]] || printf '   (This key already existed — skip this if it is on GitHub already.)\n\n'
+  fi
+  if has_step pages; then
+    n=$((n + 1))
+    if [[ -n "$(detail pages)" ]]; then
+      echo "$n. The data was pushed, but $(detail pages) does not show this collector yet."
+    else
+      echo "$n. Turn on GitHub Pages."
+    fi
+    cat <<EOF
+   In the repo: Settings -> Pages -> Source = "Deploy from a branch",
+   branch "gh-pages", folder "/ (root)". Then allow up to 10 minutes.
 
-4. Smoke test, then watch it run (run these from $APP_DIR — 'python -m' needs it):
+EOF
+  fi
+  if has_step smoke; then
+    n=$((n + 1))
+    cat <<EOF
+$n. Smoke test, then watch it run (run these from $APP_DIR — 'python -m' needs it):
      cd $APP_DIR
      sudo -u $SERVICE_USER .venv/bin/python -m collector.main latency --dry-run
      sudo -u $SERVICE_USER .venv/bin/python -m collector.main speed --force --engine speedtest-cli
      sudo systemctl start broadband-publish.service
      journalctl -u broadband-publish -n 50 --no-pager
      systemctl list-timers 'broadband-*'
-EOF
 
-[[ $NEW_KEY -eq 1 ]] || echo "(Deploy key already existed — reuse the one on GitHub.)"
+EOF
+  fi
+fi
+
 [[ $NEEDS_EDIT -eq 1 ]] && warn "config.yaml is the stock example — edit it before the first publish."
 exit 0

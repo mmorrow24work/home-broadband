@@ -92,10 +92,13 @@
   <section class="panel">
     <div class="chart-head">
       <h2>Outages</h2>
-      <p class="muted">Every non-LAN target unreachable in the same probe sweep.</p>
+      <p class="muted"><strong>Internet</strong>: every internet target unreachable while the
+        router still answered. <strong>Local network</strong>: the router was unreachable too, so
+        this machine lost its own connection (Wi-Fi, cable, sleep), not the line; it does not
+        count against availability.</p>
     </div>
     <div class="table-wrap"><table id="outages-table"><thead><tr>
-      <th scope="col">Started</th><th scope="col">Ended</th><th scope="col">Duration</th>
+      <th scope="col">Type</th><th scope="col">Started</th><th scope="col">Ended</th><th scope="col">Duration</th>
     </tr></thead><tbody></tbody></table></div>
     <p class="muted empty" id="outages-empty" hidden>No outages recorded in this window.</p>
   </section>

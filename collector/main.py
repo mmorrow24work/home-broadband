@@ -224,6 +224,14 @@ def cmd_publish(cfg: Config, args: argparse.Namespace) -> int:
     return publish(cfg, dry_run=args.dry_run, export_only=args.export_only)
 
 
+def cmd_setup_check(cfg: Config, args: argparse.Namespace) -> int:
+    from .setup_check import pending
+
+    for step, detail in pending(cfg):
+        print(f"{step}\t{detail}")
+    return 0
+
+
 def cmd_servers(cfg: Config, args: argparse.Namespace) -> int:
     """List candidate speedtest.net servers to pin in config.yaml.
 
@@ -390,6 +398,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="print a summary of collected data").set_defaults(
         func=cmd_status
     )
+    sub.add_parser(
+        "setup-check", help="list the setup steps still outstanding (used by the installers)"
+    ).set_defaults(func=cmd_setup_check)
     return parser
 
 

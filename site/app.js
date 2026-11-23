@@ -173,8 +173,12 @@
       mergeSeries(dataset.latency, payload.latency);
       mergeColumns(dataset.speed, payload.speed);
       mergeSeries(dataset.http, payload.http);
-      for (const outage of (payload.summary && payload.summary.outages) || []) {
-        outages.set(outage.start, outage); // day and month files overlap
+      const summary = payload.summary || {};
+      for (const outage of summary.outages || []) {
+        outages.set(outage.start, { kind: "internet", ...outage }); // day and month files overlap
+      }
+      for (const drop of summary.local_drops || []) {
+        outages.set(drop.start, { ...drop, kind: "local" });
       }
     }
     dataset.outages = [...outages.values()].sort((a, b) => a.start - b.start);
@@ -511,7 +515,12 @@
           "%",
           `${day.outage_count} outage${day.outage_count === 1 ? "" : "s"}, ${fmtDuration(
             day.outage_seconds
-          )} total`,
+          )} total` +
+            (day.local_drop_count
+              ? ` · ${day.local_drop_count} local network drop${
+                  day.local_drop_count === 1 ? "" : "s"
+                } not counted`
+              : ""),
           {
             level:
               day.availability_pct >= 99.99
@@ -763,7 +772,9 @@
     });
   }
 
-  /** Every non-LAN target unreachable at the same timestamp = a WAN outage. */
+  /** Every non-LAN target unreachable at the same timestamp. If the router was
+   * unreachable too, this machine lost its own network ("local"), which says
+   * nothing about the line; otherwise it is an internet outage. */
   function computeOutages() {
     if (state.dataset.outages) {
       const cutoff = RANGES[state.range].hours
@@ -772,9 +783,9 @@
       return state.dataset.outages.filter((o) => o.end >= cutoff);
     }
 
-    const wan = (state.manifest.targets || [])
-      .filter((t) => t.group !== "lan" && (t.checks || []).includes("icmp"))
-      .map((t) => t.name);
+    const icmp = (state.manifest.targets || []).filter((t) => (t.checks || []).includes("icmp"));
+    const wan = icmp.filter((t) => t.group !== "lan").map((t) => t.name);
+    const lan = icmp.filter((t) => t.group === "lan").map((t) => t.name);
     if (!wan.length) return [];
 
     const resolution = state.dataset.resolution || 60;
@@ -790,6 +801,17 @@
         byTime.set(snapped, entry);
       });
     }
+    for (const name of lan) {
+      const series = state.dataset.latency[name];
+      if (!series) continue;
+      series.t.forEach((t, i) => {
+        const snapped = Math.round(t / resolution) * resolution;
+        const entry = byTime.get(snapped);
+        if (!entry) return;
+        entry.lanTotal = (entry.lanTotal || 0) + 1;
+        if (series.loss[i] >= 100) entry.lanDead = (entry.lanDead || 0) + 1;
+      });
+    }
 
     const times = [...byTime.keys()].sort((a, b) => a - b);
     const outages = [];
@@ -797,11 +819,12 @@
     for (const t of times) {
       const entry = byTime.get(t);
       const down = entry.total > 0 && entry.dead === entry.total;
+      const kind = entry.lanTotal && entry.lanDead === entry.lanTotal ? "local" : "internet";
       if (down) {
-        if (current && t - current.end <= resolution * 2) current.end = t;
+        if (current && current.kind === kind && t - current.end <= resolution * 2) current.end = t;
         else {
           if (current) outages.push(current);
-          current = { start: t, end: t };
+          current = { start: t, end: t, kind };
         }
       } else if (current) {
         outages.push(current);
@@ -820,7 +843,13 @@
     $("#outages-table").hidden = outages.length === 0;
     for (const outage of outages.slice(0, 50)) {
       const row = el("tr");
+      const local = outage.kind === "local";
+      const type = el("td", local ? "muted" : null, local ? "Local network" : "Internet");
+      type.title = local
+        ? "The router was unreachable too: this machine lost its own connection, not the line"
+        : "Every internet target unreachable while the router still answered";
       row.append(
+        type,
         el("td", null, fmtDateTime(outage.start)),
         el("td", null, fmtDateTime(outage.end)),
         el("td", null, fmtDuration(outage.seconds))

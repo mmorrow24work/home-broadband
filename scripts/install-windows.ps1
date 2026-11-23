@@ -274,34 +274,72 @@ Register-Collector 'prune'   (New-ScheduledTaskTrigger -Daily -At $today.AddHour
 
 Say 'Done.'
 $pub = Get-Content "$Key.pub"
-@"
 
-Next steps
-----------
-1. Edit the config:   notepad $Conf
-     - publish.remote     your repo's SSH URL
-     - site.domain        your custom domain (or "")
-     - latency.targets    your router's IP (ipconfig shows it as Default Gateway)
-     - site.isp.*         advertised and guaranteed speeds
+# Ask the collector what is actually left to do, so a re-run does not repeat
+# first-run instructions that were finished long ago. If the check itself
+# fails, fall back to showing every step.
+$todo = @()
+Push-Location $AppDir
+try {
+  $out = Invoke-Quiet { & $VenvPy -m collector.main --config $Conf setup-check }
+  if ($LASTEXITCODE -eq 0) {
+    $todo = @($out | Where-Object { $_ -match "`t" } | ForEach-Object {
+      $step, $detail = $_ -split "`t", 2
+      [pscustomobject]@{ Step = $step; Detail = $detail }
+    })
+  }
+} finally { Pop-Location }
+if (-not $todo) {
+  $todo = @('config', 'key', 'pages', 'smoke') | ForEach-Object { [pscustomobject]@{ Step = $_; Detail = '' } }
+}
+$steps = $todo | Select-Object -ExpandProperty Step
 
-2. Add this deploy key to the repo with **write access**
-   (Settings -> Deploy keys -> Add deploy key -> tick "Allow write access"):
+$ok = $todo | Where-Object Step -eq 'ok'
+if ($ok) {
+  Write-Host ''
+  Write-Host 'Nothing left to set up.' -ForegroundColor Green
+  if ($ok.Detail) { Write-Host "Live at $($ok.Detail) - publishing every 20 minutes." }
+  Write-Host "Check on it:  Get-ScheduledTask -TaskPath '$TaskPath' | Get-ScheduledTaskInfo"
+} else {
+  Write-Host "`nNext steps`n----------"
+  $n = 0
+  $config = @($todo | Where-Object Step -eq 'config' | Where-Object Detail)
+  if ($config -or ($steps -contains 'config')) {
+    $n++
+    Write-Host "$n. Edit the config:   notepad $Conf"
+    if ($config) { $config | ForEach-Object { Write-Host "     - $($_.Detail)" } }
+    else {
+      Write-Host '     - publish.remote, site.domain, latency.targets (your router), site.isp.*'
+    }
+    Write-Host ''
+  }
+  if ($steps -contains 'key') {
+    $n++
+    Write-Host "$n. Add this deploy key to the repo with **write access**"
+    Write-Host '   (Settings -> Deploy keys -> Add deploy key -> tick "Allow write access"):'
+    Write-Host "`n$pub`n"
+    if (-not $NewKey) { Write-Host '   (This key already existed - skip this if it is on GitHub already.)'; Write-Host '' }
+  }
+  if ($steps -contains 'pages') {
+    $n++
+    $where = ($todo | Where-Object Step -eq 'pages').Detail
+    if ($where) { Write-Host "$n. The data was pushed, but $where does not show this collector yet." }
+    else { Write-Host "$n. Turn on GitHub Pages." }
+    Write-Host '   In the repo: Settings -> Pages -> Source = "Deploy from a branch",'
+    Write-Host '   branch "gh-pages", folder "/ (root)". Then allow up to 10 minutes.'
+    Write-Host ''
+  }
+  if ($steps -contains 'smoke') {
+    $n++
+    Write-Host "$n. Smoke test (from an elevated PowerShell), then watch it run:"
+    Write-Host "     cd $AppDir"
+    Write-Host "     .venv\Scripts\python -m collector.main --config $Conf latency --dry-run"
+    Write-Host "     .venv\Scripts\python -m collector.main --config $Conf speed --force --engine cloudflare"
+    Write-Host "     Start-ScheduledTask -TaskPath '$TaskPath' -TaskName publish"
+    Write-Host "     Get-Content $LogDir\publish.log -Tail 30"
+    Write-Host "     Get-ScheduledTask -TaskPath '$TaskPath' | Get-ScheduledTaskInfo"
+    Write-Host ''
+  }
+}
 
-$pub
-
-3. In the repo: Settings -> Pages -> Source = "Deploy from a branch",
-   branch "gh-pages", folder "/ (root)".
-
-4. Smoke test (from an elevated PowerShell), then watch it run:
-     cd $AppDir
-     .venv\Scripts\python -m collector.main --config $Conf latency --dry-run
-     .venv\Scripts\python -m collector.main --config $Conf speed --force --engine cloudflare
-     Start-ScheduledTask -TaskPath '$TaskPath' -TaskName publish
-     Get-Content $LogDir\publish.log -Tail 30
-     Get-ScheduledTask -TaskPath '$TaskPath' | Get-ScheduledTaskInfo
-
-Use Ethernet: Wi-Fi measurements tell you about Wi-Fi, not your line.
-"@ | Write-Host
-
-if (-not $NewKey) { Write-Host '(Deploy key already existed - reuse the one on GitHub.)' }
 if ($NeedsEdit) { Warn 'config.yaml is the stock example - edit it before the first publish.' }

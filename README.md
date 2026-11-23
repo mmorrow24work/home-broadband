@@ -320,6 +320,11 @@ GitHub Pages serves exactly what is in the branch.
 * A **collector switch** when more than one machine publishes, such as a
   wired box and a Wi-Fi laptop. A Wi-Fi collector's figures carry a banner:
   they include the wireless hop, so they are no evidence against the line.
+* **Outages that know whose fault they are.** If every internet target fails
+  while the router still answers, it's an *internet* outage and counts against
+  availability. If the router is unreachable too, the collector lost its own
+  network (Wi-Fi, cable, sleep). That's listed as a *local network* drop and
+  isn't counted.
 * Time ranges of 24 h / 48 h / 7 d / 30 d / all, each backed by the appropriate
   resolution so a year of history still loads in one request per month.
 * Crosshair tooltips, a clickable legend, dark and light themes.

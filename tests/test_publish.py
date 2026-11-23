@@ -304,3 +304,41 @@ def test_collector_label_can_be_overridden(tmp_path):
 
     cfg = make_config(tmp_path, site={"collector": "Jetson in the loft"})
     assert _host(cfg)["label"] == "Jetson in the loft"
+
+
+def test_router_down_too_is_a_local_drop_not_an_outage(tmp_path):
+    """Wi-Fi dropped / cable out: the router is unreachable as well as the
+    internet, so it is this machine's network, not the line."""
+    now = int(time.time())
+    cfg = make_config(tmp_path)
+    seed(cfg, now, outage_at=60, outage_len=5)
+    with db.connect(cfg.db_path) as conn:
+        conn.execute(
+            "UPDATE latency SET loss_pct = 100.0 WHERE target = 'Router' AND ts IN "
+            "(SELECT ts FROM latency WHERE target = 'CF' AND loss_pct >= 100)"
+        )
+        assert find_outages(conn, cfg, now - 86400, now + 1) == []
+        summary = window_summary(conn, cfg, now - 86400, now + 1)
+    assert summary["outage_count"] == 0
+    assert summary["availability_pct"] == 100.0
+    assert summary["local_drop_count"] == 1
+    assert summary["local_drops"][0]["seconds"] == 5 * 60
+    assert summary["local_drops"][0]["kind"] == "local"
+
+
+def test_drop_kinds_are_split_when_the_router_comes_back(tmp_path):
+    """Router back after 2 of 5 dead sweeps: 2 min local, then 3 min internet."""
+    from collector.publish import find_drops
+
+    now = int(time.time())
+    cfg = make_config(tmp_path)
+    seed(cfg, now, outage_at=60, outage_len=5)
+    with db.connect(cfg.db_path) as conn:
+        dead = [r[0] for r in conn.execute(
+            "SELECT ts FROM latency WHERE target = 'CF' AND loss_pct >= 100 ORDER BY ts")]
+        conn.executemany(
+            "UPDATE latency SET loss_pct = 100.0 WHERE target = 'Router' AND ts = ?",
+            [(ts,) for ts in dead[:2]],
+        )
+        drops = find_drops(conn, cfg, now - 86400, now + 1)
+    assert [(d["kind"], d["seconds"]) for d in drops] == [("local", 120), ("internet", 180)]

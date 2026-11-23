@@ -213,53 +213,73 @@ def export_dns(conn, start: int, end: int, bucket: int | None) -> dict[str, Any]
 # ---------------------------------------------------------------------------
 # outages & summary
 # ---------------------------------------------------------------------------
-def find_outages(conn, cfg: Config, start: int, end: int, min_seconds: int = 60):
-    """A WAN outage = every non-LAN ICMP target unreachable in the same sweep."""
-    wan_targets = [
-        t["name"]
-        for t in cfg.targets_with("icmp")
-        if t.get("group", "internet") != "lan"
-    ]
-    if not wan_targets:
+def find_drops(conn, cfg: Config, start: int, end: int, min_seconds: int = 60):
+    """Every sweep in which all internet (non-LAN) ICMP targets were unreachable.
+
+    Each event has a "kind":
+      internet  the router still answered, so the line or the ISP failed
+      local     the router was unreachable too: this machine lost its own
+                network (Wi-Fi dropped, cable out, waking from sleep), which
+                says nothing about the broadband
+    """
+    icmp = cfg.targets_with("icmp")
+    wan = [t["name"] for t in icmp if t.get("group", "internet") != "lan"]
+    lan = [t["name"] for t in icmp if t.get("group", "internet") == "lan"]
+    if not wan:
         return []
 
-    placeholders = ",".join("?" for _ in wan_targets)
+    names = wan + lan
+    placeholders = ",".join("?" for _ in names)
+    lan_marks = ",".join("?" for _ in lan) or "NULL"
     rows = conn.execute(
-        f"""SELECT ts, COUNT(*) AS n,
-                   SUM(CASE WHEN loss_pct >= 100 THEN 1 ELSE 0 END) AS dead
+        f"""SELECT ts,
+                   SUM(CASE WHEN target IN ({lan_marks}) THEN 0 ELSE 1 END) AS n,
+                   SUM(CASE WHEN target IN ({lan_marks}) THEN 0
+                            WHEN loss_pct >= 100 THEN 1 ELSE 0 END) AS dead,
+                   SUM(CASE WHEN target IN ({lan_marks}) THEN 1 ELSE 0 END) AS lan_n,
+                   SUM(CASE WHEN target IN ({lan_marks}) AND loss_pct >= 100
+                            THEN 1 ELSE 0 END) AS lan_dead
             FROM latency
             WHERE ts >= ? AND ts < ? AND target IN ({placeholders})
             GROUP BY ts ORDER BY ts""",
-        [start, end, *wan_targets],
+        [*lan, *lan, *lan, *lan, start, end, *names],
     ).fetchall()
 
     interval = max(1, int(cfg.get("latency.interval_seconds", 60)))
-    outages: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
 
     for row in rows:
         down = row["n"] > 0 and row["dead"] == row["n"]
+        kind = "local" if row["lan_n"] and row["lan_dead"] == row["lan_n"] else "internet"
         if down:
-            if current and row["ts"] - current["end"] <= interval * 2:
+            if (current and current["kind"] == kind
+                    and row["ts"] - current["end"] <= interval * 2):
                 current["end"] = row["ts"]
             else:
                 if current:
-                    outages.append(current)
-                current = {"start": row["ts"], "end": row["ts"]}
+                    events.append(current)
+                current = {"start": row["ts"], "end": row["ts"], "kind": kind}
         elif current:
-            outages.append(current)
+            events.append(current)
             current = None
     if current:
-        outages.append(current)
+        events.append(current)
 
     result = []
-    for outage in outages:
-        duration = outage["end"] - outage["start"] + interval
+    for event in events:
+        duration = event["end"] - event["start"] + interval
         if duration >= min_seconds:
-            result.append(
-                {"start": outage["start"], "end": outage["end"] + interval, "seconds": duration}
-            )
+            result.append({
+                "start": event["start"], "end": event["end"] + interval,
+                "seconds": duration, "kind": event["kind"],
+            })
     return result
+
+
+def find_outages(conn, cfg: Config, start: int, end: int, min_seconds: int = 60):
+    """Internet outages only: every WAN target down while the router answered."""
+    return [d for d in find_drops(conn, cfg, start, end, min_seconds) if d["kind"] == "internet"]
 
 
 def window_summary(conn, cfg: Config, start: int, end: int) -> dict[str, Any]:
@@ -300,7 +320,9 @@ def window_summary(conn, cfg: Config, start: int, end: int) -> dict[str, Any]:
             "unreachable_samples": row["dead"],
         }
 
-    outages = find_outages(conn, cfg, start, end)
+    drops = find_drops(conn, cfg, start, end)
+    outages = [d for d in drops if d["kind"] == "internet"]
+    local = [d for d in drops if d["kind"] == "local"]
     outage_seconds = sum(o["seconds"] for o in outages)
     span = max(1, end - start)
 
@@ -335,6 +357,10 @@ def window_summary(conn, cfg: Config, start: int, end: int) -> dict[str, Any]:
         "outages": outages[-50:],
         "outage_count": len(outages),
         "outage_seconds": outage_seconds,
+        # This machine's own network was down: not counted against the line.
+        "local_drops": local[-50:],
+        "local_drop_count": len(local),
+        "local_drop_seconds": sum(d["seconds"] for d in local),
         "availability_pct": round(100 * (1 - outage_seconds / span), 4),
         "below_guaranteed_pct": (
             round(100 * below / len(downs), 2) if downs and guaranteed else None
