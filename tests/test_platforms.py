@@ -308,3 +308,29 @@ def test_windows_installer_config_rewrites_match_and_validate(tmp_path):
     target = tmp_path / "config.yaml"
     target.write_text(text)
     load_config(target)  # full validation
+
+
+# ------------------------------------------------------------------- git lookup
+def test_find_git_prefers_the_config_then_path(monkeypatch):
+    from collector import paths
+
+    assert paths.find_git("D:/tools/git.exe") == "D:/tools/git.exe"
+    monkeypatch.setattr(paths.shutil, "which", lambda name, **kw: "/usr/bin/git")
+    assert paths.find_git("") == "/usr/bin/git"
+
+
+def test_find_git_finds_a_per_user_windows_install(tmp_path, monkeypatch):
+    """SYSTEM's PATH lacks a per-user Git for Windows; the publisher must still
+    find it (seen on the first Windows scheduled publish: WinError 2)."""
+    from collector import paths
+
+    exe = tmp_path / "Users" / "306270" / "AppData" / "Local" / "Programs" / "Git" / "cmd"
+    exe.mkdir(parents=True)
+    (exe / "git.exe").write_text("")
+    monkeypatch.setattr(paths, "IS_WINDOWS", True)
+    monkeypatch.setattr(paths.shutil, "which", lambda name, **kw: None)
+    for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(paths, "_windows_git_candidates", lambda: sorted(
+        (tmp_path / "Users").glob("*/AppData/Local/Programs/Git/cmd/git.exe")))
+    assert paths.find_git("") == str(exe / "git.exe")

@@ -37,12 +37,15 @@ from typing import Any
 
 from . import __version__, db, link
 from .config import Config
+from .paths import find_git
 
 log = logging.getLogger("broadband.publish")
 
 DATA_DIRNAME = "data"
 COLLECTORS_INDEX = "collectors.json"
 PUSH_ATTEMPTS = 4
+# Resolved once per publish from publish.git_binary; see paths.find_git.
+GIT = "git"
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +569,7 @@ def _git(
     # the command line counts as protected config, so git honours it.
     safe = f"safe.directory={Path(cwd).resolve().as_posix()}"
     proc = subprocess.run(
-        ["git", "-c", safe, *args], cwd=cwd,
+        [GIT, "-c", safe, *args], cwd=cwd,
         capture_output=True, text=True, check=False, timeout=300,
         env=env,
     )
@@ -766,7 +769,9 @@ def publish(cfg: Config, dry_run: bool = False, export_only: bool = False) -> in
         log.info("exported into %s", result["dir"])
         return 0
 
-    log.info("publishing as %s", collector_id(cfg))
+    global GIT
+    GIT = find_git(cfg.get("publish.git_binary") or "")
+    log.info("publishing as %s (git: %s)", collector_id(cfg), GIT)
     if cfg.get("publish.sync_code") and (repo_dir / ".git").is_dir():
         if owned_by_someone_else(repo_dir):
             # An --in-place checkout belongs to the human who edits it. A pull by

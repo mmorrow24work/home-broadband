@@ -155,7 +155,7 @@ def test_git_calls_trust_the_repo_whoever_owns_it(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pub.subprocess, "run", fake_run)
     pub._git(["status"], tmp_path)
-    assert seen[0][:3] == ["git", "-c", f"safe.directory={tmp_path.resolve().as_posix()}"]
+    assert seen[0][1:3] == ["-c", f"safe.directory={tmp_path.resolve().as_posix()}"]
 
 
 def test_a_crash_lands_in_the_log_file(tmp_path, monkeypatch):

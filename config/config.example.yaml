@@ -241,6 +241,10 @@ publish:
   collector_id: ""
   # Retired collectors stay on the site until listed here, e.g. ["old-pi"].
   drop_collectors: []
+  # Full path to git.exe if the publisher cannot find it. "" = PATH, then the
+  # usual Git for Windows folders, including a per-user install that SYSTEM's
+  # PATH does not include.
+  git_binary: ""
 
   # Keep the published branch at exactly one commit and force-push it.
   # The Pi's SQLite file is the source of truth, so published history has no

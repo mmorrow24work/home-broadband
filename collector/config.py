@@ -94,6 +94,8 @@ DEFAULTS: dict[str, Any] = {
         "collector_id": "",
         # Ids of retired collectors to remove from the site on the next publish.
         "drop_collectors": [],
+        # Full path to git if the scheduler cannot find it on PATH. "" = search.
+        "git_binary": "",
     },
 }
 

@@ -44,3 +44,29 @@ def find_binary(name: str) -> str | None:
     if os.path.dirname(name):  # an explicit path in the config
         return shutil.which(name)
     return shutil.which(name) or shutil.which(name, path=str(Path(sys.executable).parent))
+
+
+def _windows_git_candidates() -> list[Path]:
+    """Where Git for Windows lands: machine-wide, or per user in a profile."""
+    roots = [os.environ.get(v) for v in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")]
+    found = [Path(r) / "Git" / "cmd" / "git.exe" for r in roots if r]
+    found.append(Path(r"C:\Program Files\Git\cmd\git.exe"))
+    # A per-user install (the winget / installer default without admin) is on
+    # that user's PATH only. Scheduled tasks run as SYSTEM and cannot see it.
+    users = Path(os.environ.get("SYSTEMDRIVE", "C:") + "\\") / "Users"
+    found += sorted(users.glob("*/AppData/Local/Programs/Git/cmd/git.exe"))
+    return found
+
+
+def find_git(configured: str = "") -> str:
+    """The git executable: publish.git_binary, PATH, then the usual install dirs."""
+    if configured:
+        return configured
+    on_path = shutil.which("git")
+    if on_path:
+        return on_path
+    if IS_WINDOWS:
+        for candidate in _windows_git_candidates():
+            if candidate.is_file():
+                return str(candidate)
+    return "git"  # let the error name it

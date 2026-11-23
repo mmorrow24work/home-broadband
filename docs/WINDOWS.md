@@ -134,6 +134,12 @@ publish when `publish.sync_code` is true. Re-run the installer if
   up far better than it does on a Pi.
 * **Security software** that intercepts TLS can inflate the HTTP TLS and TTFB
   figures. Compare the trend over time rather than the absolute values.
+* **Publish fails with exit code 1 and `FileNotFoundError: [WinError 2]` in
+  `publish.log`.** The scheduled task runs as SYSTEM and couldn't find `git`.
+  A per-user Git for Windows install is only on your own PATH. The publisher
+  now also looks in `Program Files\Git` and in each profile's
+  `AppData\Local\Programs\Git`. If git lives somewhere else, set
+  `publish.git_binary` to the full path that `where.exe git` prints.
 * **`CRYPT_E_NO_REVOCATION_CHECK`** came from `curl.exe` failing an HTTPS check
   whenever it could not reach the CA's revocation server, which work networks
   often block. The HTTP probe now passes `--ssl-revoke-best-effort`. That
