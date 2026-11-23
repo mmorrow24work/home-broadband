@@ -142,3 +142,17 @@ def test_index_puts_wired_collectors_first(tmp_path):
     (root / "stray").mkdir()
     entries = pub.write_collectors_index(root)
     assert [e["id"] for e in entries] == ["z-box", "a-laptop"]
+
+
+def test_git_calls_trust_the_repo_whoever_owns_it(tmp_path, monkeypatch):
+    """A manual publish as a person, then a scheduled one as SYSTEM, shares the
+    scratch repo; without safe.directory git refuses it as dubious ownership."""
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(pub.subprocess, "run", fake_run)
+    pub._git(["status"], tmp_path)
+    assert seen[0][:3] == ["git", "-c", f"safe.directory={tmp_path.resolve().as_posix()}"]

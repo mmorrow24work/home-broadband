@@ -560,8 +560,14 @@ def git_ssh_command(key: str, known_hosts: str | None = None) -> str:
 def _git(
     args: list[str], cwd: Path, check: bool = True, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess:
+    # Trust this one repo whoever owns it. The scratch repo may have been made
+    # by a manual run as a person and then used by SYSTEM / the service user
+    # (or the reverse), and git refuses that as "dubious ownership". A -c on
+    # the command line counts as protected config, so git honours it.
+    safe = f"safe.directory={Path(cwd).resolve().as_posix()}"
     proc = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False, timeout=300,
+        ["git", "-c", safe, *args], cwd=cwd,
+        capture_output=True, text=True, check=False, timeout=300,
         env=env,
     )
     if check and proc.returncode != 0:
