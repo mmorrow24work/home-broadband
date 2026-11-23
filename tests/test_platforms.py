@@ -229,6 +229,14 @@ def test_windows_wifi_is_unknown_not_a_ceiling():
     assert link.parse_windows_adapter(payload) == ("Wi-Fi", None)
 
 
+def test_windows_connection_type():
+    assert link.windows_connection(_adapter()) == "wired"
+    wifi = _adapter(Name="Wi-Fi", PhysicalMediaType="Native 802.11",
+                    InterfaceDescription="Intel(R) Wi-Fi 6E AX211 160MHz")
+    assert link.windows_connection(wifi) == "wifi"
+    assert link.windows_connection("") is None
+
+
 def test_windows_garbage_is_unknown():
     assert link.parse_windows_adapter("") == (None, None)
     assert link.parse_windows_adapter("[1, 2]") == (None, None)

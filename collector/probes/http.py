@@ -13,6 +13,8 @@ import subprocess
 import time
 from typing import Any
 
+from ..paths import IS_WINDOWS
+
 DEFAULT_EXPECT = ["200-399"]
 
 
@@ -118,6 +120,12 @@ def probe(target: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         _WRITE_OUT,
         url,
     ]
+    if IS_WINDOWS:
+        # Windows curl.exe uses Schannel, which fails the whole request with
+        # CRYPT_E_NO_REVOCATION_CHECK when it cannot reach a CA's revocation
+        # server (blocked by a firewall, or slow). Best-effort still rejects a
+        # certificate that really is revoked.
+        cmd.insert(1, "--ssl-revoke-best-effort")
     if target.get("family") == "ipv4":
         cmd.insert(1, "-4")
     elif target.get("family") == "ipv6":

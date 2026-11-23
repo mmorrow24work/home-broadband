@@ -106,6 +106,11 @@ else {
 """
 
 
+def _is_wireless_media(data: dict) -> bool:
+    media = f"{data.get('PhysicalMediaType') or ''} {data.get('InterfaceDescription') or ''}"
+    return "802.11" in media or "wireless" in media.lower() or "wi-fi" in media.lower()
+
+
 def parse_windows_adapter(payload: str) -> tuple[str | None, int | None]:
     """(interface name, link speed in Mbit/s) from the PowerShell JSON above."""
     try:
@@ -116,8 +121,7 @@ def parse_windows_adapter(payload: str) -> tuple[str | None, int | None]:
         return None, None
 
     name = data.get("Name") or None
-    media = f"{data.get('PhysicalMediaType') or ''} {data.get('InterfaceDescription') or ''}"
-    if "802.11" in media or "wireless" in media.lower() or "wi-fi" in media.lower():
+    if _is_wireless_media(data):
         return name, None  # nominal Wi-Fi rates are not a throughput ceiling
 
     speeds = [data.get("ReceiveLinkSpeed"), data.get("TransmitLinkSpeed")]
@@ -128,8 +132,19 @@ def parse_windows_adapter(payload: str) -> tuple[str | None, int | None]:
     return name, mbps if 0 < mbps <= 400_000 else None
 
 
+def windows_connection(payload: str) -> str | None:
+    """'wifi' or 'wired' from the same PowerShell JSON, None if unreadable."""
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("Name"):
+        return None
+    return "wifi" if _is_wireless_media(data) else "wired"
+
+
 @functools.lru_cache(maxsize=8)
-def _windows_adapter(interface: str | None = None) -> tuple[str | None, int | None]:
+def _windows_adapter_json(interface: str | None = None) -> str:
     safe = (interface or "").replace("'", "''")
     try:
         proc = subprocess.run(
@@ -137,11 +152,15 @@ def _windows_adapter(interface: str | None = None) -> tuple[str | None, int | No
             capture_output=True, text=True, timeout=20, check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return None, None
+        return ""
     if proc.returncode != 0:
         log.debug("adapter query failed: %s", proc.stderr.strip()[:200])
-        return None, None
-    return parse_windows_adapter(proc.stdout.strip())
+        return ""
+    return proc.stdout.strip()
+
+
+def _windows_adapter(interface: str | None = None) -> tuple[str | None, int | None]:
+    return parse_windows_adapter(_windows_adapter_json(interface))
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +185,20 @@ def link_speed_mbps(interface: str | None = None) -> int | None:
     if not interface:
         return None
     return _linux_link_speed(interface)
+
+
+def connection_type(interface: str | None = None) -> str | None:
+    """'wired' or 'wifi' for the interface carrying the default route.
+
+    The dashboard shows it next to each collector: a Wi-Fi result includes the
+    wireless hop, so it cannot be held against the line the way a wired one can.
+    """
+    if IS_WINDOWS:
+        return windows_connection(_windows_adapter_json(interface))
+    interface = interface or default_interface()
+    if not interface:
+        return None
+    return "wifi" if (SYS_NET / interface / "wireless").exists() else "wired"
 
 
 # DMI strings that boards ship unfilled; never worth showing.
@@ -201,6 +234,7 @@ def describe() -> dict[str, object]:
     return {
         "interface": interface,
         "link_speed_mbps": link_speed_mbps(interface),
+        "connection": connection_type(interface),
         "hostname": socket.gethostname().split(".")[0],
         "model": device_model(),
     }

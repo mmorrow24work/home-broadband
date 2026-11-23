@@ -112,6 +112,26 @@ a  { color: var(--series-1); }
 }
 .ghost-btn:hover { background: var(--surface-1); color: var(--ink-1); }
 
+/* ---------- collector switch ---------- */
+.collector-switch {
+  display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 12px;
+  padding: 3px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface-1);
+}
+.collector-switch button {
+  font: inherit; font-size: 0.85rem; cursor: pointer;
+  display: inline-flex; align-items: baseline; gap: 7px;
+  padding: 6px 14px; border: 0; border-radius: 999px;
+  color: var(--ink-2); background: transparent; max-width: 100%;
+}
+.collector-switch button:hover { color: var(--ink-1); }
+.collector-switch button[aria-pressed="true"] { background: var(--ink-1); color: var(--surface-1); }
+.collector-switch .conn { font-weight: 600; }
+.collector-switch .who {
+  font-size: 0.78rem; opacity: 0.8;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 32ch;
+}
+
 /* ---------- stat tiles ---------- */
 .tiles {
   display: grid; gap: 12px; margin-bottom: 18px;

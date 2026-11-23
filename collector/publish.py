@@ -11,6 +11,11 @@ Design notes
   over the naive layout and parses faster in the browser.
 * The last `latest_hours` are published at full probe resolution; everything
   older is bucketed to `bucket_seconds`, and whole months are rolled up hourly.
+* Several collectors can share one site — a wired box and a Wi-Fi laptop, say.
+  Each owns data/<collector id>/ and nothing else: before pushing, a publisher
+  fetches the branch, carries every other collector's directory across into its
+  new snapshot, rebuilds data/collectors.json (the dashboard's switcher) and
+  pushes with --force-with-lease, retrying if another collector got in first.
 """
 
 from __future__ import annotations
@@ -20,7 +25,10 @@ import json
 import logging
 import math
 import os
+import random
+import re
 import shutil
+import socket
 import subprocess
 import time
 from collections.abc import Sequence
@@ -33,6 +41,8 @@ from .config import Config
 log = logging.getLogger("broadband.publish")
 
 DATA_DIRNAME = "data"
+COLLECTORS_INDEX = "collectors.json"
+PUSH_ATTEMPTS = 4
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +343,44 @@ def window_summary(conn, cfg: Config, start: int, end: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # export orchestration
 # ---------------------------------------------------------------------------
+def collector_id(cfg: Config) -> str:
+    """This collector's directory name under data/: publish.collector_id, or the
+    hostname, reduced to a URL-safe slug ("Tegra Ubuntu" -> "tegra-ubuntu")."""
+    raw = (cfg.get("publish.collector_id") or "").strip() or socket.gethostname().split(".")[0]
+    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    return slug[:40] or "collector"
+
+
+def write_collectors_index(data_root: Path) -> list[dict[str, Any]]:
+    """data/collectors.json: every collector directory that holds a manifest.
+
+    Wired collectors sort first, so the dashboard opens on the measurement that
+    can be held against the line unless the visitor picked another.
+    """
+    entries = []
+    if data_root.is_dir():
+        for manifest_path in sorted(data_root.glob("*/manifest.json")):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                log.warning("skipping unreadable %s", manifest_path)
+                continue
+            host = manifest.get("host") or {}
+            entries.append({
+                "id": manifest_path.parent.name,
+                "label": host.get("label") or manifest_path.parent.name,
+                "connection": host.get("connection"),
+                "link_speed_mbps": host.get("link_speed_mbps"),
+                "generated_at": manifest.get("generated_at"),
+            })
+    entries.sort(key=lambda e: (e["connection"] != "wired", str(e["label"]).lower()))
+    _write_json(data_root / COLLECTORS_INDEX, {
+        "generated_at": int(time.time()),
+        "collectors": entries,
+    })
+    return entries
+
+
 def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
     tz = _tzinfo(cfg.get("site.timezone", "UTC"))
     now = int(time.time())
@@ -340,7 +388,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
     latest_hours = int(cfg.get("publish.latest_hours", 48))
     keep_daily = int(cfg.get("publish.keep_daily_days", 400))
 
-    data_dir = out_dir / DATA_DIRNAME
+    data_dir = out_dir / DATA_DIRNAME / collector_id(cfg)
     if data_dir.exists():
         shutil.rmtree(data_dir)
     (data_dir / "daily").mkdir(parents=True, exist_ok=True)
@@ -451,6 +499,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
 
     manifest = {
         "version": __version__,
+        "id": collector_id(cfg),
         "generated_at": now,
         "site": {
             "title": cfg.get("site.title"),
@@ -486,7 +535,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
         "exported %d day files, %d month files, %.1f kB total",
         len(days), len(months), total_bytes / 1024,
     )
-    return {"days": days, "months": months, "bytes": total_bytes}
+    return {"days": days, "months": months, "bytes": total_bytes, "dir": data_dir}
 
 
 # ---------------------------------------------------------------------------
@@ -556,12 +605,61 @@ def _sync_tree(src: Path, dst: Path) -> None:
             shutil.copyfile(item, target)
 
 
+def _fetch_published(repo: Path, branch: str, env: dict[str, str] | None) -> str | None:
+    """Fetch the live branch; return its commit, or None if it does not exist yet."""
+    ref = f"refs/remotes/origin/{branch}"
+    fetch = _git(
+        ["fetch", "-q", "--depth", "1", "origin", f"+refs/heads/{branch}:{ref}"],
+        repo, check=False, env=env,
+    )
+    if fetch.returncode != 0:
+        err = (fetch.stderr or "").lower()
+        if "couldn't find remote ref" in err or "could not find remote ref" in err:
+            return None
+        raise RuntimeError(f"git fetch {branch} failed: {(fetch.stderr or '').strip()[:400]}")
+    return _git(["rev-parse", ref], repo).stdout.strip()
+
+
+def carry_other_collectors(
+    repo: Path, base: str, own_id: str, drop: set[str], keep_cname: bool
+) -> list[str]:
+    """Copy every other collector's data/<id>/ from the live commit into repo.
+
+    Only directories with a manifest count: the pre-multi-collector layout kept
+    its files straight under data/, and those are left behind on purpose.
+    """
+    listing = _git(["ls-tree", "--name-only", f"{base}:{DATA_DIRNAME}"], repo, check=False)
+    kept = []
+    for name in listing.stdout.split():
+        if name == own_id or name in drop:
+            continue
+        probe = _git(
+            ["cat-file", "-e", f"{base}:{DATA_DIRNAME}/{name}/manifest.json"], repo, check=False
+        )
+        if probe.returncode == 0:
+            kept.append(name)
+    paths = [f"{DATA_DIRNAME}/{name}" for name in kept]
+    if keep_cname and _git(["cat-file", "-e", f"{base}:CNAME"], repo, check=False).returncode == 0:
+        paths.append("CNAME")  # a collector with no site.domain must not unset it
+    if paths:
+        _git(["checkout", base, "--", *paths], repo)
+    return kept
+
+
+def _lost_race(proc: subprocess.CompletedProcess) -> bool:
+    err = (proc.stderr or "").lower()
+    return any(s in err for s in ("stale info", "rejected", "fetch first", "non-fast-forward"))
+
+
 def push(cfg: Config, tree: Path) -> None:
     work = Path(cfg.get("publish.work_dir"))
     repo = work / "repo"
     branch = cfg.get("publish.branch", "gh-pages")
     remote = cfg.get("publish.remote")
     squash = bool(cfg.get("publish.squash", True))
+    own_id = collector_id(cfg)
+    drop = {str(x) for x in (cfg.get("publish.drop_collectors") or [])}
+    keep_cname = not (cfg.get("site.domain") or "").strip()
 
     # The systemd unit sets GIT_SSH_COMMAND itself; publish.ssh_key exists for
     # schedulers that cannot (Windows Task Scheduler) and overrides it if set.
@@ -574,39 +672,56 @@ def push(cfg: Config, tree: Path) -> None:
         log.info("initialising publish repo at %s", repo)
         _git(["init", "-q", "-b", branch], repo)
         _git(["remote", "add", "origin", remote], repo)
-        if not squash:
-            fetch = _git(
-                ["fetch", "--depth", "1", "origin", branch], repo, check=False, env=env
-            )
-            if fetch.returncode == 0:
-                _git(["reset", "--hard", f"origin/{branch}"], repo)
     else:
         _git(["remote", "set-url", "origin", remote], repo)
 
     _git(["config", "user.name", cfg.get("publish.git_user_name")], repo)
     _git(["config", "user.email", cfg.get("publish.git_user_email")], repo)
 
-    _sync_tree(tree, repo)
+    for attempt in range(1, PUSH_ATTEMPTS + 1):
+        base = _fetch_published(repo, branch, env)
+        _sync_tree(tree, repo)
+        others = carry_other_collectors(repo, base, own_id, drop, keep_cname) if base else []
+        write_collectors_index(repo / DATA_DIRNAME)
 
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    message = f"data: broadband snapshot {stamp}"
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        message = f"data: {own_id} snapshot {stamp}"
 
-    if squash:
-        _git(["checkout", "-q", "--orphan", "__publish"], repo)
-        _git(["add", "-A"], repo)
-        _git(["commit", "-q", "-m", message], repo)
-        _git(["branch", "-M", branch], repo)
-        _git(["push", "--force", "origin", branch], repo, env=env)
-    else:
-        _git(["add", "-A"], repo)
-        status = _git(["status", "--porcelain"], repo)
-        if not status.stdout.strip():
-            log.info("no changes to publish")
+        if squash:
+            # One parentless commit, built with plumbing so no checkout state can
+            # get in the way of a retry.
+            _git(["add", "-A"], repo)
+            tree_sha = _git(["write-tree"], repo).stdout.strip()
+            commit = _git(["commit-tree", tree_sha, "-m", message], repo).stdout.strip()
+            _git(["update-ref", f"refs/heads/{branch}", commit], repo)
+            _git(["symbolic-ref", "HEAD", f"refs/heads/{branch}"], repo)
+            proc = _git(
+                ["push", f"--force-with-lease={branch}:{base or ''}", "origin", branch],
+                repo, check=False, env=env,
+            )
+        else:
+            if base:
+                _git(["reset", "-q", "--mixed", base], repo)
+            _git(["add", "-A"], repo)
+            if not _git(["status", "--porcelain"], repo).stdout.strip():
+                log.info("no changes to publish")
+                return
+            _git(["commit", "-q", "-m", message], repo)
+            proc = _git(["push", "origin", f"HEAD:{branch}"], repo, check=False, env=env)
+
+        if proc.returncode == 0:
+            log.info(
+                "pushed %s to %s as %s%s", branch, remote, own_id,
+                f" (alongside {', '.join(others)})" if others else "",
+            )
             return
-        _git(["commit", "-q", "-m", message], repo)
-        _git(["push", "origin", f"HEAD:{branch}"], repo, env=env)
-
-    log.info("pushed %s to %s", branch, remote)
+        if not _lost_race(proc) or attempt == PUSH_ATTEMPTS:
+            raise RuntimeError(
+                f"git push failed ({proc.returncode}): {(proc.stderr or '').strip()[:400]}"
+            )
+        wait = random.uniform(2, 10) * attempt
+        log.info("another collector published first; retrying in %.0fs", wait)
+        time.sleep(wait)
 
 
 def _host(cfg: Config) -> dict[str, Any]:
@@ -640,8 +755,9 @@ def publish(cfg: Config, dry_run: bool = False, export_only: bool = False) -> in
         return 1
 
     if export_only:
-        build_export(cfg, site_src)
-        log.info("exported into %s", site_src / DATA_DIRNAME)
+        result = build_export(cfg, site_src)
+        write_collectors_index(site_src / DATA_DIRNAME)
+        log.info("exported into %s", result["dir"])
         return 0
 
     if cfg.get("publish.sync_code") and (repo_dir / ".git").is_dir():
@@ -671,6 +787,7 @@ def publish(cfg: Config, dry_run: bool = False, export_only: bool = False) -> in
             shutil.copyfile(item, tree / item.name)
 
     build_export(cfg, tree)
+    write_collectors_index(tree / DATA_DIRNAME)
 
     (tree / ".nojekyll").write_text("", encoding="utf-8")
     domain = (cfg.get("site.domain") or "").strip()

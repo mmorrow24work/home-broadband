@@ -1,11 +1,16 @@
 /* home-broadband dashboard
- * Loads the JSON the collector (Pi, Jetson, PC) publishes and renders it with uPlot.
+ * Loads the JSON the collectors (Pi, Jetson, PC) publish and renders it with uPlot.
+ * Several collectors can share the site; a switch in the header picks one.
  * No build step, no external requests — everything here is served from the
  * same GitHub Pages branch. */
 (() => {
   "use strict";
 
-  const DATA = "data";
+  const ROOT = "data";
+  // Folder of the collector being shown: data/<id> once collectors.json lists
+  // it, plain data/ for a site published before collectors had their own.
+  let DATA = ROOT;
+  const CONNECTION_LABELS = { wired: "Wired", wifi: "Wi-Fi" };
   const SERIES_SLOTS = 8;
   // Engine ids are stored verbatim by the collector; these are display names.
   const ENGINE_LABELS = {
@@ -23,6 +28,8 @@
   };
 
   const state = {
+    collectors: [],
+    collectorId: null,
     manifest: null,
     summary: null,
     range: "24h",
@@ -450,6 +457,7 @@
       const linkSpeed = Number((state.manifest.host || {}).link_speed_mbps) || 0;
       const nicBound =
         linkSpeed > 0 && Math.max(current.down_mbps || 0, current.up_mbps || 0) >= linkSpeed * 0.85;
+      const overWifi = (state.manifest.host || {}).connection === "wifi";
       const level =
         guaranteed && current.down_mbps < guaranteed
           ? "critical"
@@ -467,6 +475,8 @@
                 level: "warning",
                 text: `capped by this machine's ${linkSpeed} Mbit link`,
               }
+            : overWifi && guaranteed && level !== "good"
+            ? { level: "warning", text: "measured over Wi-Fi, not the line" }
             : guaranteed
             ? {
                 level,
@@ -530,6 +540,7 @@
   }
 
   function renderSLA() {
+    $("#sla-panel").hidden = true; // until we know there is something to show
     const isp = state.manifest.site.isp || {};
     const advertised = Number(isp.advertised_down_mbps) || 0;
     const guaranteed = Number(isp.guaranteed_min_down_mbps) || 0;
@@ -550,7 +561,14 @@
     body.innerHTML = "";
 
     const banner = $("#sla-banner");
-    if (nicBound) {
+    const overWifi = (state.manifest.host || {}).connection === "wifi";
+    if (overWifi) {
+      banner.textContent =
+        "Measured over Wi-Fi. These numbers include the wireless hop between this " +
+        "machine and the router, so they normally sit below what the line delivers. " +
+        "Hold the ISP to the wired collector's figures, not these.";
+      banner.hidden = false;
+    } else if (nicBound) {
       banner.textContent =
         `This collector is on a ${linkSpeed} Mbit link, which caps measurements at ` +
         `about ${Math.round(usableCeiling)} Mbps — below your ${advertised} Mbps package. ` +
@@ -923,9 +941,83 @@
     });
   }
 
-  // ------------------------------------------------------------------ boot
-  async function boot() {
-    initTheme();
+  // ------------------------------------------------------------ collectors
+  async function loadCollectors() {
+    try {
+      const index = await fetchJSON(`${ROOT}/collectors.json`);
+      return (index.collectors || []).filter((c) => c && c.id);
+    } catch (_) {
+      return []; // published before collectors had their own folders
+    }
+  }
+
+  function pickCollector(list) {
+    let stored = null;
+    try {
+      stored = localStorage.getItem("bb-collector");
+    } catch (_) {
+      stored = null;
+    }
+    const fromHash = decodeURIComponent(location.hash.slice(1));
+    for (const id of [fromHash, stored]) {
+      if (id && list.some((c) => c.id === id)) return id;
+    }
+    return list[0].id; // the publisher lists wired collectors first
+  }
+
+  function renderCollectorSwitch() {
+    const box = $("#collector-switch");
+    box.innerHTML = "";
+    box.hidden = state.collectors.length < 2;
+    for (const c of state.collectors) {
+      const button = el("button");
+      button.type = "button";
+      button.setAttribute("aria-pressed", String(c.id === state.collectorId));
+      button.append(
+        el("span", "conn", CONNECTION_LABELS[c.connection] || "Collector"),
+        el("span", "who", c.label)
+      );
+      button.title = c.generated_at
+        ? `${c.label} — last published ${relative(c.generated_at)}`
+        : c.label;
+      button.addEventListener("click", () => switchCollector(c.id));
+      box.appendChild(button);
+    }
+  }
+
+  async function switchCollector(id) {
+    if (id === state.collectorId || !state.collectors.some((c) => c.id === id)) return;
+    state.collectorId = id;
+    try {
+      localStorage.setItem("bb-collector", id);
+    } catch (_) {
+      /* not remembered — the URL hash still is */
+    }
+    history.replaceState(null, "", `#${encodeURIComponent(id)}`);
+    renderCollectorSwitch();
+    await loadCollector();
+  }
+
+  function describeMethod(host) {
+    const who = host.label || "a dedicated collector";
+    if (host.connection === "wifi") {
+      return (
+        `These figures were measured over Wi-Fi by ${who}, so they include the wireless ` +
+        "link: a shortfall here is not by itself evidence of a line fault."
+      );
+    }
+    if (host.connection === "wired") {
+      return (
+        `These figures are wired-to-router measurements from ${who}; Wi-Fi speeds ` +
+        "will be lower and are not evidence of a line fault."
+      );
+    }
+    return `These figures are measurements from ${who}.`;
+  }
+
+  /** Fetch and draw everything for the selected collector. */
+  async function loadCollector() {
+    DATA = state.collectorId ? `${ROOT}/${state.collectorId}` : ROOT;
     try {
       const [manifest, summary] = await Promise.all([
         fetchJSON(`${DATA}/manifest.json`),
@@ -934,28 +1026,30 @@
       state.manifest = manifest;
       state.summary = summary;
     } catch (error) {
+      if (state.manifest) {
+        $("#generated").textContent = `Could not load this collector (${error.message}).`;
+        return false;
+      }
       $("#generated").textContent = "No data published yet.";
       $("#tiles").appendChild(
-        el(
-          "p",
-          "muted",
-          `Waiting for the collector's first publish (${error.message}).`
-        )
+        el("p", "muted", `Waiting for the collector's first publish (${error.message}).`)
       );
-      return;
+      return false;
     }
 
+    state.retired = new Map();
     state.tz = state.manifest.site.timezone || "UTC";
     document.title = state.manifest.site.title || document.title;
     $("#site-title").textContent = state.manifest.site.title || "Home Broadband Monitor";
     $("#site-subtitle").textContent = state.manifest.site.subtitle || "";
+    const host = state.manifest.host || {};
     // Older collectors published no label; keep the generic wording then.
-    const collector = (state.manifest.host || {}).label;
-    if (collector) {
+    if (host.label) {
       document.querySelectorAll(".collector-name").forEach((node) => {
-        node.textContent = collector;
+        node.textContent = host.label;
       });
     }
+    $("#sla-method").textContent = describeMethod(host);
     $("#generated").textContent = `Updated ${fmtDateTime(state.manifest.generated_at)} · ${relative(
       state.manifest.generated_at
     )}`;
@@ -963,11 +1057,25 @@
     renderTiles();
     renderSLA();
     renderTargets();
-    await setRange("24h");
+    await setRange(state.range);
+    return true;
+  }
+
+  // ------------------------------------------------------------------ boot
+  async function boot() {
+    initTheme();
+
+    state.collectors = await loadCollectors();
+    if (state.collectors.length) state.collectorId = pickCollector(state.collectors);
+    renderCollectorSwitch();
+    if (!(await loadCollector())) return;
 
     for (const button of document.querySelectorAll("#range-buttons button")) {
       button.addEventListener("click", () => setRange(button.dataset.range));
     }
+    window.addEventListener("hashchange", () =>
+      switchCollector(decodeURIComponent(location.hash.slice(1)))
+    );
 
     let resizeTimer;
     window.addEventListener("resize", () => {
@@ -975,7 +1083,8 @@
       resizeTimer = setTimeout(resizeCharts, 120);
     });
 
-    // Pick up a new publish without a manual refresh.
+    // Pick up a new publish without a manual refresh. The URL hash and
+    // localStorage keep the reloaded page on the same collector.
     setInterval(async () => {
       try {
         const manifest = await fetchJSON(`${DATA}/manifest.json`);

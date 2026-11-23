@@ -211,6 +211,9 @@ speed:
     download_bytes: 250000000
     upload_bytes: 100000000
     duration_seconds: 12
+    # Go direct even if the OS has a proxy configured (a work laptop's corporate
+    # proxy would be measured instead of your line). true = use the proxy.
+    use_system_proxy: false
 
 # ---------------------------------------------------------------------------
 # Publishing to GitHub Pages.
@@ -230,6 +233,14 @@ publish:
   # Deploy key used for the push. Leave "" on Linux, where the systemd unit
   # pins the key itself; install-windows.ps1 sets it, as Task Scheduler cannot.
   ssh_key: ""
+
+  # Several collectors can publish to the same site — say a wired Jetson and a
+  # Wi-Fi laptop — and the dashboard gets a button to switch between them.
+  # Each needs its own id (its folder: data/<id>/); "" uses the hostname.
+  # Give them the same remote, branch and site.domain.
+  collector_id: ""
+  # Retired collectors stay on the site until listed here, e.g. ["old-pi"].
+  drop_collectors: []
 
   # Keep the published branch at exactly one commit and force-push it.
   # The Pi's SQLite file is the source of truth, so published history has no

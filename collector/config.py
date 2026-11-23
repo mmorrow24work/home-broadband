@@ -69,6 +69,7 @@ DEFAULTS: dict[str, Any] = {
             "download_bytes": 250_000_000,
             "upload_bytes": 100_000_000,
             "duration_seconds": 12,
+            "use_system_proxy": False,
         },
     },
     "publish": {
@@ -88,6 +89,11 @@ DEFAULTS: dict[str, Any] = {
         # Optional deploy key for the push. Linux sets GIT_SSH_COMMAND in the
         # systemd unit instead; Windows scheduled tasks have nowhere to put it.
         "ssh_key": "",
+        # This collector's folder on the site (data/<id>/). Empty = hostname.
+        # Give every collector sharing a site its own id.
+        "collector_id": "",
+        # Ids of retired collectors to remove from the site on the next publish.
+        "drop_collectors": [],
     },
 }
 

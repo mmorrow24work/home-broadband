@@ -22,6 +22,7 @@ def make_config(tmp_path, **overrides):
             "latest_hours": 48,
             "repo_dir": str(tmp_path),
             "work_dir": str(tmp_path / "work"),
+            "collector_id": "test",
         },
         "latency": {
             "interval_seconds": 60,
@@ -131,9 +132,9 @@ def test_build_export_writes_a_loadable_site_payload(tmp_path):
 
     result = build_export(cfg, out)
 
-    manifest = json.loads((out / "data" / "manifest.json").read_text())
-    latest = json.loads((out / "data" / "latest.json").read_text())
-    summary = json.loads((out / "data" / "summary.json").read_text())
+    manifest = json.loads((out / "data" / "test" / "manifest.json").read_text())
+    latest = json.loads((out / "data" / "test" / "latest.json").read_text())
+    summary = json.loads((out / "data" / "test" / "summary.json").read_text())
 
     assert manifest["days"] == result["days"]
     assert [t["name"] for t in manifest["targets"]] == ["Router", "CF", "Google"]
@@ -148,7 +149,7 @@ def test_build_export_writes_a_loadable_site_payload(tmp_path):
     assert summary["windows"]["24h"]["tests"] == 4
     assert summary["current"]["down_mbps"] == 495.0
 
-    day_files = list((out / "data" / "daily").glob("*.json"))
+    day_files = list((out / "data" / "test" / "daily").glob("*.json"))
     assert day_files
     day = json.loads(day_files[-1].read_text())
     assert day["resolution"] == 300
@@ -234,7 +235,7 @@ def test_manifest_records_the_collector_link_speed(tmp_path):
     out.mkdir()
     build_export(cfg, out)
 
-    manifest = json.loads((out / "data" / "manifest.json").read_text())
+    manifest = json.loads((out / "data" / "test" / "manifest.json").read_text())
     assert "host" in manifest
     assert {"interface", "link_speed_mbps", "hostname", "model", "label"} <= set(manifest["host"])
     assert manifest["host"]["label"].endswith(f"({manifest['host']['hostname']})")

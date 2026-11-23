@@ -243,6 +243,19 @@ This way the repo stays the size of one snapshot — about **17 MB after a year*
 
 Set `publish.squash: false` if you would rather keep the history.
 
+### More than one collector
+
+Several machines can publish to the same site, for example a wired Jetson and
+a Wi-Fi laptop. Each one writes only `data/<publish.collector_id>/`. Before every
+push it fetches the branch, copies the other collectors' folders into its own
+snapshot, rebuilds `data/collectors.json` and pushes with `--force-with-lease`.
+If another collector pushed first, it starts again (up to four tries).
+Give each machine its own `publish.collector_id` and the same `publish.remote`,
+`branch` and `site.domain`. The dashboard then shows a **Wired / Wi-Fi**
+switch in the header and opens on a wired collector by default. Its URL hash
+(`#tegra`) links straight to one collector. To remove a retired machine, add
+its id to `publish.drop_collectors` on any collector that is still running.
+
 ## Where the data lives
 
 **Only on the `gh-pages` branch, under `data/`.** The `main` branch holds code
@@ -254,12 +267,17 @@ gh-pages/
 ├── CNAME                                    site.domain, rewritten every publish
 ├── .nojekyll                                stops GitHub's Jekyll eating data/
 └── data/
-    ├── manifest.json      targets, timezone, ISP, link speed, index of available days
-    ├── summary.json       24 h / 7 d / 30 d / all-time headline stats and outages
-    ├── latest.json        the last `latest_hours` at full probe resolution
-    ├── daily/YYYY-MM-DD.json    one file per day, `bucket_seconds` buckets
-    └── monthly/YYYY-MM.json     one file per month, hourly buckets
+    ├── collectors.json    every collector on the site: id, label, wired/Wi-Fi
+    └── <collector id>/    one folder per collector (publish.collector_id)
+        ├── manifest.json      targets, timezone, ISP, link speed, index of available days
+        ├── summary.json       24 h / 7 d / 30 d / all-time headline stats and outages
+        ├── latest.json        the last `latest_hours` at full probe resolution
+        ├── daily/YYYY-MM-DD.json    one file per day, `bucket_seconds` buckets
+        └── monthly/YYYY-MM.json     one file per month, hourly buckets
 ```
+
+The table and commands below use `data/` for short. On the live site, put the
+collector's folder in the path: `data/<id>/manifest.json`.
 
 Sizes, measured against an eleven-target config — they scale with how many
 targets you probe, so a smaller list is proportionally smaller:
@@ -280,8 +298,9 @@ Inspect the live data without cloning anything — the `days` array in the
 manifest lists every daily file that exists:
 
 ```bash
-curl -s https://your-domain/data/manifest.json | python3 -m json.tool
-curl -s https://your-domain/data/summary.json  | python3 -m json.tool
+curl -s https://your-domain/data/collectors.json     | python3 -m json.tool
+curl -s https://your-domain/data/<id>/manifest.json | python3 -m json.tool
+curl -s https://your-domain/data/<id>/summary.json  | python3 -m json.tool
 ```
 
 Because the branch is rewritten as one orphan commit, `git log gh-pages` will
@@ -298,6 +317,9 @@ Vanilla HTML, CSS and JavaScript with [uPlot](https://github.com/leeoniya/uPlot)
 vendored into `site/vendor/`. No build step, no CDN, no analytics, no cookies —
 GitHub Pages serves exactly what is in the branch.
 
+* A **collector switch** when more than one machine publishes, such as a
+  wired box and a Wi-Fi laptop. A Wi-Fi collector's figures carry a banner:
+  they include the wireless hop, so they are no evidence against the line.
 * Time ranges of 24 h / 48 h / 7 d / 30 d / all, each backed by the appropriate
   resolution so a year of history still loads in one request per month.
 * Crosshair tooltips, a clickable legend, dark and light themes.

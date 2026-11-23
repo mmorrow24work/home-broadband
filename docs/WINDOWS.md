@@ -74,6 +74,19 @@ notepad C:\ProgramData\broadband-monitor\config.yaml
 Set `publish.remote`, `site.domain` and `site.isp.*`. Then set the
 **Router** target to your gateway: `ipconfig` shows it as *Default Gateway*.
 
+**Sharing a site with another collector**, such as a wired Jetson: use the
+same `publish.remote` and `site.domain`, and give this PC its own id and label.
+
+```yaml
+site:
+  collector: "Windows PC (Wi-Fi)"   # shown on the switch; hides the hostname
+publish:
+  collector_id: "pc"                # its folder on the site: data/pc/
+```
+
+Each collector keeps the other's data when it publishes, and the dashboard
+shows a Wired / Wi-Fi switch.
+
 Add the public key the installer printed to the repo under **Settings → Deploy
 keys** and tick **Allow write access**. Then:
 
@@ -121,3 +134,13 @@ publish when `publish.sync_code` is true. Re-run the installer if
   up far better than it does on a Pi.
 * **Security software** that intercepts TLS can inflate the HTTP TLS and TTFB
   figures. Compare the trend over time rather than the absolute values.
+* **`CRYPT_E_NO_REVOCATION_CHECK`** came from `curl.exe` failing an HTTPS check
+  whenever it could not reach the CA's revocation server, which work networks
+  often block. The HTTP probe now passes `--ssl-revoke-best-effort`. That
+  ignores an unreachable revocation server but still rejects a certificate
+  that has actually been revoked.
+* **Proxies and VPNs.** The Cloudflare engine ignores the Windows proxy setting
+  (`speed.cloudflare.use_system_proxy: false`). A work laptop with a corporate
+  proxy or an always-on VPN still measures that path rather than your line, so
+  disconnect the VPN, or don't treat the laptop's numbers as evidence against
+  the ISP.

@@ -16,6 +16,8 @@
   <div class="topbar-main">
     <h1 id="site-title">Home Broadband Monitor</h1>
     <p id="site-subtitle" class="muted"></p>
+    <div id="collector-switch" class="collector-switch" role="group"
+         aria-label="Which collector's measurements to show" hidden></div>
   </div>
   <div class="topbar-side">
     <p class="muted" id="generated">Loading…</p>
@@ -36,9 +38,7 @@
       Under Ofcom's Broadband Speed Code of Practice your provider must give a
       guaranteed minimum download speed. If measured speed sits below it and they
       cannot fix it within 30 days, you can normally exit the contract without penalty.
-      These figures are wired-to-router measurements from
-      <span class="collector-name">a dedicated collector</span>; Wi-Fi speeds
-      will be lower and are not evidence of a line fault.
+      <span id="sla-method">These figures are measurements from a dedicated collector.</span>
     </p>
   </section>
 

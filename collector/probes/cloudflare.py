@@ -10,6 +10,9 @@ wrapper library, so the measurement method is explicit and stable:
                window *after* a warm-up period, so TCP slow start and the
                congestion-window ramp do not drag the number down.
   * upload   — the same shape against __up with a generated payload.
+
+System proxies are bypassed by default (`use_system_proxy: false`): a work
+laptop's corporate proxy would otherwise be what gets measured, not the line.
 """
 
 from __future__ import annotations
@@ -91,8 +94,28 @@ def measure_latency(session: requests.Session, samples: int = 12, timeout: float
     return round(min(timings), 2), round(jitter, 2), round(100 * failures / samples, 2)
 
 
-def _download_worker(counter: _Counter, stop: threading.Event, chunk_bytes: int) -> None:
+class _Errors:
+    """The most recent failure seen by any worker, so a direction that moved no
+    bytes can say why instead of reporting a bare 0 Mbps."""
+
+    def __init__(self) -> None:
+        self.last: str | None = None
+
+    def note(self, exc: Exception) -> None:
+        self.last = f"{type(exc).__name__}: {exc}"[:200]
+
+
+def _session(trust_env: bool) -> requests.Session:
     session = requests.Session()
+    session.trust_env = trust_env  # False: ignore HTTPS_PROXY / Windows proxy settings
+    return session
+
+
+def _download_worker(
+    counter: _Counter, stop: threading.Event, chunk_bytes: int,
+    errors: _Errors, trust_env: bool = False,
+) -> None:
+    session = _session(trust_env)
     try:
         while not stop.is_set():
             try:
@@ -102,43 +125,55 @@ def _download_worker(counter: _Counter, stop: threading.Event, chunk_bytes: int)
                     stream=True,
                     timeout=30,
                 ) as response:
+                    response.raise_for_status()
                     for block in response.iter_content(CHUNK):
                         counter.add(len(block))
                         if stop.is_set():
                             break
-            except requests.RequestException:
+            except requests.RequestException as exc:
                 if stop.is_set():
                     return
+                errors.note(exc)
                 time.sleep(0.25)
     finally:
         session.close()
 
 
-def _upload_worker(counter: _Counter, stop: threading.Event, chunk_bytes: int) -> None:
-    session = requests.Session()
+def _upload_worker(
+    counter: _Counter, stop: threading.Event, chunk_bytes: int,
+    errors: _Errors, trust_env: bool = False,
+) -> None:
+    session = _session(trust_env)
     try:
         while not stop.is_set():
             try:
-                session.post(
+                response = session.post(
                     f"{BASE}/__up",
                     data=_UploadBody(chunk_bytes, stop, counter),
                     headers={"Content-Type": "application/octet-stream"},
                     timeout=30,
                 )
-            except requests.RequestException:
+                response.raise_for_status()
+            except requests.RequestException as exc:
                 if stop.is_set():
                     return
+                errors.note(exc)
                 time.sleep(0.25)
     finally:
         session.close()
 
 
-def _run_direction(worker, streams: int, chunk_bytes: int, duration: float) -> tuple[float, int]:
-    """Run `streams` workers and return (mbps, total_bytes_transferred)."""
+def _run_direction(
+    worker, streams: int, chunk_bytes: int, duration: float, trust_env: bool = False
+) -> tuple[float, int, str | None]:
+    """Run `streams` workers; return (mbps, total bytes, last error or None)."""
     counter = _Counter()
+    errors = _Errors()
     stop = threading.Event()
     threads = [
-        threading.Thread(target=worker, args=(counter, stop, chunk_bytes), daemon=True)
+        threading.Thread(
+            target=worker, args=(counter, stop, chunk_bytes, errors, trust_env), daemon=True
+        )
         for _ in range(streams)
     ]
     for thread in threads:
@@ -157,7 +192,7 @@ def _run_direction(worker, streams: int, chunk_bytes: int, duration: float) -> t
 
     elapsed = max(end_time - start_time, 0.001)
     mbps = (end_bytes - start_bytes) * 8 / elapsed / 1_000_000
-    return round(mbps, 3), counter.read()
+    return round(mbps, 3), counter.read(), errors.last
 
 
 def parse_trace(text: str) -> dict[str, str]:
@@ -236,8 +271,9 @@ def run(settings: dict[str, Any]) -> dict[str, Any]:
     duration = float(settings.get("duration_seconds", 12))
     down_cap = int(settings.get("download_bytes", 250_000_000))
     up_cap = int(settings.get("upload_bytes", 100_000_000))
+    trust_env = bool(settings.get("use_system_proxy", False))
 
-    session = requests.Session()
+    session = _session(trust_env)
     try:
         meta = fetch_meta(session)
         row["server"] = (
@@ -253,22 +289,28 @@ def run(settings: dict[str, Any]) -> dict[str, Any]:
         ping_ms, jitter_ms, loss_pct = measure_latency(session)
         row.update(ping_ms=ping_ms, jitter_ms=jitter_ms, loss_pct=loss_pct)
 
-        down_mbps, down_bytes = _run_direction(
-            _download_worker, streams, max(CHUNK, down_cap // streams), duration
+        down_mbps, down_bytes, down_err = _run_direction(
+            _download_worker, streams, max(CHUNK, down_cap // streams), duration, trust_env
         )
-        up_mbps, up_bytes = _run_direction(
-            _upload_worker, streams, max(CHUNK, up_cap // streams), duration
+        up_mbps, up_bytes, up_err = _run_direction(
+            _upload_worker, streams, max(CHUNK, up_cap // streams), duration, trust_env
         )
 
+        # A direction that moved nothing failed; 0 would chart as a real result.
         row.update(
             ok=1 if down_mbps > 0 else 0,
-            down_mbps=down_mbps,
-            up_mbps=up_mbps,
+            down_mbps=down_mbps if down_mbps > 0 else None,
+            up_mbps=up_mbps if up_mbps > 0 else None,
             bytes_down=down_bytes,
             bytes_up=up_bytes,
         )
-        if not row["ok"]:
-            row["error"] = "no bytes transferred"
+        problems = []
+        if not down_mbps > 0:
+            problems.append(f"download failed: {down_err or 'no bytes transferred'}")
+        if not up_mbps > 0:
+            problems.append(f"upload failed: {up_err or 'no bytes transferred'}")
+        if problems:
+            row["error"] = "; ".join(problems)[:300]
     except Exception as exc:  # noqa: BLE001 - a failed test is itself a data point
         row["error"] = f"{type(exc).__name__}: {exc}"[:300]
     finally:
