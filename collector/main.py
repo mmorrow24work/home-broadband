@@ -19,6 +19,7 @@ import concurrent.futures
 import datetime as dt
 import logging
 import logging.handlers
+import os
 import subprocess
 import sys
 import time
@@ -63,6 +64,7 @@ def setup_logging(verbose: bool = False, log_file: str | None = None) -> None:
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
         handlers=handlers,
+        force=True,  # apply even if something already configured the root logger
     )
 
 
@@ -394,17 +396,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     setup_logging(args.verbose, args.log_file)
+    log.debug("%s starting (pid %d)", args.command, os.getpid())
     try:
-        cfg = load_config(args.config)
-    except ConfigError as exc:
-        log.error("configuration error: %s", exc)
-        return 2
+        try:
+            cfg = load_config(args.config)
+        except ConfigError as exc:
+            log.error("configuration error: %s", exc)
+            return 2
 
-    db.init(cfg.db_path)
-    try:
+        db.init(cfg.db_path)
         return args.func(cfg, args)
     except KeyboardInterrupt:
         return 130
+    except Exception:
+        # Task Scheduler discards stderr, so an uncaught traceback would leave
+        # nothing but exit code 1 and an empty log. Put it in the log instead.
+        log.exception("%s crashed", args.command)
+        return 1
 
 
 if __name__ == "__main__":

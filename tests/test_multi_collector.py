@@ -156,3 +156,30 @@ def test_git_calls_trust_the_repo_whoever_owns_it(tmp_path, monkeypatch):
     monkeypatch.setattr(pub.subprocess, "run", fake_run)
     pub._git(["status"], tmp_path)
     assert seen[0][:3] == ["git", "-c", f"safe.directory={tmp_path.resolve().as_posix()}"]
+
+
+def test_a_crash_lands_in_the_log_file(tmp_path, monkeypatch):
+    """Task Scheduler discards stderr: an uncaught error must reach --log-file."""
+    import logging
+
+    from collector import main as cli
+
+    cfg = make_config(tmp_path)
+    log_file = tmp_path / "publish.log"
+
+    def boom(*_a, **_k):
+        raise PermissionError("access denied: pages\\\\repo")
+
+    monkeypatch.setattr(pub, "publish", boom)
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        rc = cli.main(["--config", str(cfg.source), "--log-file", str(log_file), "publish"])
+    finally:
+        for h in root.handlers[:]:
+            if h not in before:
+                h.close()
+                root.removeHandler(h)
+    assert rc == 1
+    text = log_file.read_text()
+    assert "publish crashed" in text and "PermissionError" in text

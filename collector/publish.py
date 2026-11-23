@@ -766,6 +766,7 @@ def publish(cfg: Config, dry_run: bool = False, export_only: bool = False) -> in
         log.info("exported into %s", result["dir"])
         return 0
 
+    log.info("publishing as %s", collector_id(cfg))
     if cfg.get("publish.sync_code") and (repo_dir / ".git").is_dir():
         if owned_by_someone_else(repo_dir):
             # An --in-place checkout belongs to the human who edits it. A pull by
@@ -774,7 +775,9 @@ def publish(cfg: Config, dry_run: bool = False, export_only: bool = False) -> in
             # their own `git pull` is the update path there.
             log.info("code sync skipped: %s belongs to another user", repo_dir)
         else:
-            pull = _git(["pull", "--ff-only", "-q"], repo_dir, check=False)
+            # Never wait on a credential prompt nobody can answer (SYSTEM, cron).
+            pull = _git(["pull", "--ff-only", "-q"], repo_dir, check=False,
+                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"})
             if pull.returncode != 0:
                 log.warning("code sync skipped: %s", (pull.stderr or "").strip()[:200])
 
