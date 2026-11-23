@@ -268,7 +268,8 @@ function Register-Collector ($name, $trigger, $limit) {
 # Omitting -RepetitionDuration repeats indefinitely on Windows 10/11.
 Register-Collector 'latency' (New-ScheduledTaskTrigger -Once -At $today -RepetitionInterval (New-TimeSpan -Minutes 1)) (New-TimeSpan -Minutes 2)
 Register-Collector 'speed'   (New-ScheduledTaskTrigger -Once -At $today.AddMinutes(5) -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay (New-TimeSpan -Minutes 5)) (New-TimeSpan -Minutes 10)
-Register-Collector 'publish' (New-ScheduledTaskTrigger -Once -At $today.AddMinutes(30) -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay (New-TimeSpan -Minutes 2)) (New-TimeSpan -Minutes 15)
+# :00/:20/:40, interleaved with the Linux timer's :10/:30/:50 (see systemd/broadband-publish.timer).
+Register-Collector 'publish' (New-ScheduledTaskTrigger -Once -At $today -RepetitionInterval (New-TimeSpan -Minutes 20) -RandomDelay (New-TimeSpan -Minutes 1)) (New-TimeSpan -Minutes 15)
 Register-Collector 'prune'   (New-ScheduledTaskTrigger -Daily -At $today.AddHours(4).AddMinutes(17)) (New-TimeSpan -Minutes 30)
 
 Say 'Done.'

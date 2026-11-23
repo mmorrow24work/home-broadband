@@ -74,7 +74,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "publish": {
         "enabled": True,
-        "interval_minutes": 60,
+        "interval_minutes": 20,
         "remote": "",
         "branch": "gh-pages",
         "repo_dir": str(APP_DIR),

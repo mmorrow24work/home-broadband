@@ -1,10 +1,13 @@
 [Unit]
-Description=Publish broadband results hourly
+Description=Publish broadband results every 20 minutes
 
 [Timer]
 OnBootSec=5min
-OnCalendar=hourly
-RandomizedDelaySec=120
+# :10, :30, :50 - after the hourly speed test (:00-:05) has finished, and
+# off the Windows collector's :00/:20/:40 so two collectors sharing a site
+# take turns. Six Pages deploys an hour between them; GitHub's soft limit is 10.
+OnCalendar=*:10/20
+RandomizedDelaySec=60
 AccuracySec=1min
 Persistent=true
 Unit=broadband-publish.service

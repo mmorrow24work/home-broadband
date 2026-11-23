@@ -293,7 +293,7 @@ curl -sI https://home-broadband.example.com | head -3
 systemctl list-timers 'broadband-*'
 ```
 
-Expect four: latency (every minute), speed (hourly), publish (hourly), prune
+Expect four: latency (every minute), speed (hourly), publish (every 20 minutes), prune
 (daily 04:17). To change a cadence, edit the timer and keep `config.yaml` in
 step — the dashboard reads the configured interval for its captions:
 

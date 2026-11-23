@@ -220,7 +220,7 @@ speed:
 # ---------------------------------------------------------------------------
 publish:
   enabled: true
-  interval_minutes: 60
+  interval_minutes: 20      # informational; the timer / scheduled task sets the pace
 
   # SSH remote of your repo. Use SSH + a deploy key with write access.
   remote: "git@github.com:mmorrow24work/home-broadband.git"   # CHANGE ME

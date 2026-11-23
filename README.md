@@ -64,7 +64,7 @@ Raspberry Pi (wired to the router)
 ├── systemd timers
 │   ├── broadband-latency.timer   every minute   ── ICMP / DNS / HTTP sweep
 │   ├── broadband-speed.timer     hourly         ── Ookla → speedtest-cli → Cloudflare
-│   ├── broadband-publish.timer   hourly         ── aggregate + push
+│   ├── broadband-publish.timer   every 20 min   ── aggregate + push
 │   └── broadband-prune.timer     daily          ── retention
 │
 ├── /var/lib/broadband-monitor/broadband.db      ── SQLite, system of record
