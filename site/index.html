@@ -36,7 +36,8 @@
       Under Ofcom's Broadband Speed Code of Practice your provider must give a
       guaranteed minimum download speed. If measured speed sits below it and they
       cannot fix it within 30 days, you can normally exit the contract without penalty.
-      These figures are wired-to-router measurements from a Raspberry Pi; Wi-Fi speeds
+      These figures are wired-to-router measurements from
+      <span class="collector-name">a dedicated collector</span>; Wi-Fi speeds
       will be lower and are not evidence of a line fault.
     </p>
   </section>
@@ -115,7 +116,7 @@
   <section class="panel" id="targets-panel">
     <div class="chart-head">
       <h2>Monitored targets</h2>
-      <p class="muted">Edit <code>config.yaml</code> on the Pi to change this list.</p>
+      <p class="muted">Edit <code>config.yaml</code> on the collector to change this list.</p>
     </div>
     <div class="table-wrap"><table id="targets-table"><thead><tr>
       <th scope="col">Name</th><th scope="col">Host</th>
@@ -126,9 +127,9 @@
 
 <footer>
   <p class="muted">
-    Collected on a Raspberry Pi by
+    Collected on <span class="collector-name">a dedicated collector</span> by
     <a href="https://github.com/mmorrow24work/home-broadband">home-broadband</a>.
-    Data refreshes when the Pi publishes — see the timestamp at the top of the page.
+    Data refreshes when the collector publishes — see the timestamp at the top of the page.
   </p>
 </footer>
 

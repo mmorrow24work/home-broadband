@@ -16,6 +16,10 @@ site:
   domain: "home-broadband.coldwire.uk"   # CHANGE ME (or set to "")
   # IANA timezone used for day bucketing and axis labels.
   timezone: "Europe/London"
+  # How the dashboard names the machine collecting the data. "" = detect it,
+  # e.g. "NVIDIA Jetson AGX Orin 64GB (tegra-ubuntu)". Set a fixed label here
+  # if you would rather not publish the hostname.
+  collector: ""
   # Your ISP / package details — used for the SLA panel on the dashboard.
   isp:
     name: ""                       # e.g. "Community Fibre" — blank = auto-detect from speed tests

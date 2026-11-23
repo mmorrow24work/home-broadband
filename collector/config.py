@@ -24,6 +24,7 @@ DEFAULTS: dict[str, Any] = {
         "subtitle": "",
         "domain": "",
         "timezone": "Europe/London",
+        "collector": "",
         "isp": {
             "name": "",
             "package": "",

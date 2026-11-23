@@ -236,7 +236,8 @@ def test_manifest_records_the_collector_link_speed(tmp_path):
 
     manifest = json.loads((out / "data" / "manifest.json").read_text())
     assert "host" in manifest
-    assert set(manifest["host"]) == {"interface", "link_speed_mbps"}
+    assert {"interface", "link_speed_mbps", "hostname", "model", "label"} <= set(manifest["host"])
+    assert manifest["host"]["label"].endswith(f"({manifest['host']['hostname']})")
 
 
 def test_copy_contents_ignores_source_permissions(tmp_path):
@@ -294,3 +295,11 @@ def test_sync_code_leaves_someone_elses_checkout_alone(tmp_path, monkeypatch):
     assert pub.owned_by_someone_else(tmp_path) is False
     monkeypatch.setattr(os, "geteuid", lambda: os.stat(tmp_path).st_uid + 1)
     assert pub.owned_by_someone_else(tmp_path) is True
+
+
+def test_collector_label_can_be_overridden(tmp_path):
+    """site.collector replaces the auto label, e.g. to keep the hostname private."""
+    from collector.publish import _host
+
+    cfg = make_config(tmp_path, site={"collector": "Jetson in the loft"})
+    assert _host(cfg)["label"] == "Jetson in the loft"

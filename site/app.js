@@ -1,5 +1,5 @@
 /* home-broadband dashboard
- * Loads the JSON the Raspberry Pi publishes and renders it with uPlot.
+ * Loads the JSON the collector (Pi, Jetson, PC) publishes and renders it with uPlot.
  * No build step, no external requests — everything here is served from the
  * same GitHub Pages branch. */
 (() => {
@@ -949,6 +949,13 @@
     document.title = state.manifest.site.title || document.title;
     $("#site-title").textContent = state.manifest.site.title || "Home Broadband Monitor";
     $("#site-subtitle").textContent = state.manifest.site.subtitle || "";
+    // Older collectors published no label; keep the generic wording then.
+    const collector = (state.manifest.host || {}).label;
+    if (collector) {
+      document.querySelectorAll(".collector-name").forEach((node) => {
+        node.textContent = collector;
+      });
+    }
     $("#generated").textContent = `Updated ${fmtDateTime(state.manifest.generated_at)} · ${relative(
       state.manifest.generated_at
     )}`;

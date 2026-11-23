@@ -416,6 +416,35 @@ The `CNAME` file is rewritten from `site.domain` on every publish because the
 branch is force-pushed. If you set the domain only in the GitHub UI, set it in
 `config.yaml` as well.
 
+### History vanished after moving to new hardware
+
+The database lives on the collector, and every publish force-pushes `gh-pages`
+as one orphan commit (see the README). A new collector (a Jetson replacing the
+Pi, say) therefore starts with an empty database, and its first publish replaces
+the old dashboard. Nothing is stored anywhere else: no gist, no second branch.
+
+Get the history back with `scripts/import_history.py`. It never overwrites
+rows the new collector measured itself, and it is safe to re-run.
+
+* **Best:** copy the old collector's `/var/lib/broadband-monitor/broadband.db`
+  across and use `--from-db old.db`. That restores every raw sample, including
+  anything it collected after its last successful publish.
+* **Otherwise:** use the last published snapshot. GitHub keeps the overwritten
+  `gh-pages` commit for a while: find its SHA in *Actions → pages build and
+  deployment*, `git fetch origin <sha>`, then `git tag` it and use
+  `--from-git <tag>`. That gives 5-minute buckets for latency, DNS and HTTP and
+  every speed test exactly, for the days the snapshot held (`keep_daily_days`).
+
+```bash
+sudo systemctl stop 'broadband-*.timer'
+cd ~/git/home-broadband
+sudo -u broadband .venv/bin/python scripts/import_history.py \
+     --from-git pi-archive-2026-09-16 --db /var/lib/broadband-monitor/broadband.db
+sudo systemctl start broadband-latency.timer broadband-speed.timer \
+     broadband-publish.timer broadband-prune.timer
+sudo systemctl start broadband-publish.service
+```
+
 ### Charts are empty for a range that should have data
 
 Day files are dropped from the published set after `publish.keep_daily_days`

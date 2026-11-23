@@ -16,6 +16,8 @@ import contextlib
 import functools
 import json
 import logging
+import platform
+import socket
 import subprocess
 from pathlib import Path
 
@@ -166,11 +168,41 @@ def link_speed_mbps(interface: str | None = None) -> int | None:
     return _linux_link_speed(interface)
 
 
+# DMI strings that boards ship unfilled; never worth showing.
+_DMI_JUNK = {"", "default string", "to be filled by o.e.m.", "system product name", "none"}
+
+
+def device_model() -> str:
+    """A human name for the collector hardware, e.g. 'NVIDIA Jetson AGX Orin 64GB'.
+
+    ARM boards (Pi, Jetson) describe themselves in the device tree; PCs in DMI.
+    """
+    try:
+        model = Path("/proc/device-tree/model").read_bytes().rstrip(b"\0").decode().strip()
+        if model:
+            return model
+    except OSError:
+        pass
+    parts = []
+    for name in ("sys_vendor", "product_name"):
+        try:
+            value = (Path("/sys/class/dmi/id") / name).read_text().strip()
+        except OSError:
+            continue
+        if value.lower() not in _DMI_JUNK and value not in parts:
+            parts.append(value)
+    if parts:
+        return " ".join(parts)
+    return "Windows PC" if IS_WINDOWS else f"{platform.system() or 'Unknown'} machine"
+
+
 def describe() -> dict[str, object]:
     interface = default_interface()
     return {
         "interface": interface,
         "link_speed_mbps": link_speed_mbps(interface),
+        "hostname": socket.gethostname().split(".")[0],
+        "model": device_model(),
     }
 
 

@@ -458,7 +458,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
             "timezone": cfg.get("site.timezone"),
             "isp": isp,
         },
-        "host": link.describe(),
+        "host": _host(cfg),
         "collection": {
             "latency_interval_seconds": int(cfg.get("latency.interval_seconds", 60)),
             "speed_interval_minutes": int(cfg.get("speed.interval_minutes", 30)),
@@ -607,6 +607,15 @@ def push(cfg: Config, tree: Path) -> None:
         _git(["push", "origin", f"HEAD:{branch}"], repo, env=env)
 
     log.info("pushed %s to %s", branch, remote)
+
+
+def _host(cfg: Config) -> dict[str, Any]:
+    """What the dashboard says collected the data: the board and its hostname,
+    unless site.collector overrides it (say, to keep the hostname private)."""
+    host = dict(link.describe())
+    override = (cfg.get("site.collector") or "").strip()
+    host["label"] = override or f"{host['model']} ({host['hostname']})"
+    return host
 
 
 def owned_by_someone_else(path: Path) -> bool:
