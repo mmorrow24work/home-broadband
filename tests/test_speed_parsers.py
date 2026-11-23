@@ -185,7 +185,8 @@ def test_speedtest_cli_command_options(monkeypatch):
 def test_missing_binary_is_a_failed_row_not_an_exception(monkeypatch):
     from collector.probes import speedtest_cli
 
-    monkeypatch.setattr("shutil.which", lambda _: None)
+    # find_binary also looks beside the interpreter (the venv); stub the seam.
+    monkeypatch.setattr(speedtest_cli, "find_binary", lambda _: None)
     row = speedtest_cli.run({})
     assert row["ok"] == 0
     assert "not found on PATH" in row["error"]

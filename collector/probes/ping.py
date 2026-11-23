@@ -1,17 +1,26 @@
-"""ICMP echo probe built on the system `ping` binary (iputils).
+"""ICMP echo probe built on the system `ping` binary.
 
 Using the system binary rather than raw sockets keeps the collector
-unprivileged on Raspberry Pi OS, where ping uses ICMP datagram sockets.
+unprivileged: on Linux (Raspberry Pi OS, Ubuntu on Jetson) iputils ping uses
+ICMP datagram sockets, and on Windows ping.exe needs no special rights at all.
+
+The two speak different dialects. iputils takes `-c count -i interval -w
+deadline` and prints a min/avg/max/mdev summary; Windows takes `-n count -w
+per-reply-timeout-ms`, always waits a second between echoes, prints integer
+milliseconds and no deviation figure, and localises every word of its output.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 import shutil
 import subprocess
 import time
 from typing import Any
+
+from ..paths import IS_WINDOWS
 
 # "5 packets transmitted, 5 received, 0% packet loss, time 1004ms"
 # "5 packets transmitted, 4 received, +1 errors, 20% packet loss, time 4056ms"
@@ -28,8 +37,70 @@ _RTT_RE = re.compile(
 )
 
 
+# Windows. Matched on punctuation and numbers only, because the words are
+# localised ("Reply from"/"Antwort von", "time"/"Zeit", "loss"/"Verlust"):
+#   "Reply from 1.1.1.1: bytes=32 time=12ms TTL=57"     -> 12
+#   "Reply from 192.168.1.1: bytes=32 time<1ms TTL=64"  -> sub-millisecond
+#   "Reply from 2606:4700:4700::1111: time=9ms"         -> 9 (IPv6 has no bytes/TTL)
+# The summary's "Minimum = 11ms" has a space after '=' and so never matches.
+_WIN_REPLY_RE = re.compile(r"(?P<op>[=<])(?P<ms>\d+(?:[.,]\d+)?)\s?ms\b", re.IGNORECASE)
+#   "Packets: Sent = 5, Received = 5, Lost = 0 (0% loss),"
+_WIN_COUNTS_RE = re.compile(
+    r"=\s*(?P<sent>\d+),\s*[^=,]+=\s*(?P<recv>\d+),\s*[^=,]+=\s*(?P<lost>\d+)\s*\(\s*\d+\s*%"
+)
+
+# Windows prints "time<1ms" for a sub-millisecond reply; record the midpoint.
+_WIN_SUB_MS = 0.5
+
+
+def parse_windows_ping_output(output: str) -> dict[str, Any]:
+    """Parse Windows ping.exe output into the same shape as iputils.
+
+    The "Received" counter cannot be trusted: Windows counts "Destination host
+    unreachable" from the local router as a *received reply*, reporting 0% loss
+    to a host that answered nothing. So replies are counted individually, and
+    only those carrying a round-trip time count as received.
+    """
+    result: dict[str, Any] = {
+        "sent": 0,
+        "recv": 0,
+        "loss_pct": 100.0,
+        "rtt_min": None,
+        "rtt_avg": None,
+        "rtt_max": None,
+        "rtt_mdev": None,
+    }
+
+    counts = _WIN_COUNTS_RE.search(output)
+    if not counts:
+        return result
+    sent = int(counts.group("sent"))
+
+    times: list[float] = []
+    for line in output.splitlines():
+        if _WIN_COUNTS_RE.search(line):
+            continue
+        match = _WIN_REPLY_RE.search(line)
+        if match:
+            ms = float(match.group("ms").replace(",", "."))
+            times.append(_WIN_SUB_MS if match.group("op") == "<" else ms)
+
+    recv = min(len(times), sent)
+    result["sent"] = sent
+    result["recv"] = recv
+    result["loss_pct"] = round((sent - recv) / sent * 100, 1) if sent else 100.0
+    if times:
+        mean = sum(times) / len(times)
+        result["rtt_min"] = min(times)
+        result["rtt_avg"] = round(mean, 3)
+        result["rtt_max"] = max(times)
+        # iputils' mdev is the population standard deviation; match it.
+        result["rtt_mdev"] = round(math.sqrt(sum((x - mean) ** 2 for x in times) / len(times)), 3)
+    return result
+
+
 def parse_ping_output(output: str) -> dict[str, Any]:
-    """Parse iputils/BusyBox ping summary text into a result dict.
+    """Parse iputils/BusyBox (or, failing those, Windows) ping text into a result dict.
 
     Always returns sent/recv/loss_pct; rtt_* are None when nothing came back.
     """
@@ -56,6 +127,8 @@ def parse_ping_output(output: str) -> dict[str, Any]:
         result["rtt_max"] = float(rtt.group("max"))
         result["rtt_mdev"] = float(rtt.group("mdev"))
 
+    if not counts:
+        return parse_windows_ping_output(output)
     return result
 
 
@@ -76,9 +149,16 @@ def build_command(
     timeout: int = 6,
     family: str = "auto",
     binary: str | None = None,
+    windows: bool = IS_WINDOWS,
 ) -> list[str]:
     ping = binary or shutil.which("ping") or "ping"
-    cmd = [ping, "-n", "-q", "-c", str(count), "-i", str(interval), "-w", str(int(timeout))]
+    if windows:
+        # -w is a per-reply wait in ms, not a deadline; spread the budget so a
+        # dead host still costs roughly `timeout` seconds, as it does on Linux.
+        per_reply_ms = max(500, int(timeout * 1000 / max(count, 1)))
+        cmd = [ping, "-n", str(count), "-w", str(per_reply_ms)]
+    else:
+        cmd = [ping, "-n", "-q", "-c", str(count), "-i", str(interval), "-w", str(int(timeout))]
     if family == "ipv4":
         cmd.append("-4")
     elif family == "ipv6":
@@ -117,12 +197,17 @@ def probe(target: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         family=family,
     )
 
+    # Windows ping always paces echoes a second apart, so allow for that too.
+    deadline = timeout + 5 + (count if IS_WINDOWS else 0)
     try:
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=timeout + 5,
+            # Windows console tools write in the OEM code page, not the ANSI one.
+            encoding="oem" if IS_WINDOWS else None,
+            errors="replace",
+            timeout=deadline,
             check=False,
         )
     except FileNotFoundError:

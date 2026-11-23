@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 import time
 from typing import Any
+
+from ..paths import find_binary
 
 
 class SpeedtestCliNotInstalled(RuntimeError):
@@ -80,10 +81,11 @@ def parse_result(payload: str) -> dict[str, Any]:
 
 def build_command(settings: dict[str, Any]) -> list[str]:
     binary = settings.get("binary") or "speedtest-cli"
-    resolved = shutil.which(binary)
+    resolved = find_binary(binary)
     if not resolved:
         raise SpeedtestCliNotInstalled(
-            f"{binary!r} not found on PATH. Install it with: sudo apt install speedtest-cli"
+            f"{binary!r} not found on PATH. Install it with: sudo apt install speedtest-cli "
+            "(Windows: pip install speedtest-cli into the venv)"
         )
 
     cmd = [resolved, "--json"]
@@ -198,7 +200,8 @@ def parse_server_list(output: str) -> list[dict[str, Any]]:
 
 
 def list_servers(settings: dict[str, Any], timeout: int = 60) -> list[dict[str, Any]]:
-    cmd = [shutil.which(settings.get("binary") or "speedtest-cli") or "speedtest-cli", "--list"]
+    binary = settings.get("binary") or "speedtest-cli"
+    cmd = [find_binary(binary) or binary, "--list"]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or "speedtest-cli --list failed").strip()[:300])

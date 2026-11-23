@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# home-broadband installer for Raspberry Pi OS / Debian / Ubuntu.
+# home-broadband installer for Raspberry Pi OS / Debian / Ubuntu, including
+# NVIDIA Jetson (Tegra) boards on L4T / JetPack. Windows: install-windows.ps1.
 #
 #   sudo ./scripts/install.sh                 # copy to /opt/broadband-monitor
 #   sudo ./scripts/install.sh --in-place      # run from this checkout
@@ -17,7 +18,9 @@ set -euo pipefail
 DATA_DIR=/var/lib/broadband-monitor
 CONF_DIR=/etc/broadband-monitor
 SERVICE_USER=broadband
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# -P resolves symlinks. ~/git is often a link to a bigger disk (a Jetson's NVMe,
+# say); systemd and the permission logic below must see the real path.
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 APP_DIR="${APP_DIR:-/opt/broadband-monitor}"
 
 say()  { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -28,11 +31,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --in-place) APP_DIR="$SRC_DIR"; shift ;;
     --app-dir)  APP_DIR="${2:?--app-dir needs a path}"; shift 2 ;;
-    -h|--help)  sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help)  sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
     *)          die "unknown option: $1" ;;
   esac
 done
-APP_DIR="${APP_DIR%/}"
+APP_DIR="$(realpath -m "$APP_DIR")"
 
 [[ $EUID -eq 0 ]] || die "run me with sudo"
 command -v systemctl >/dev/null || die "this installer expects systemd"
@@ -87,6 +90,16 @@ is_ookla() {
 
 ARCH="$(dpkg --print-architecture)"
 say "Package architecture: $ARCH"
+MODEL="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
+[[ -n "$MODEL" ]] && say "Board: $MODEL"
+if [[ -f /etc/nv_tegra_release ]]; then
+  say "NVIDIA Jetson / Tegra detected ($(head -1 /etc/nv_tegra_release | cut -d, -f1-2 | sed 's/^# //'))"
+  # Throughput tests are partly CPU-bound; a Jetson in a low nvpmodel power mode
+  # under-reports fast lines the same way a slow Pi does.
+  if command -v nvpmodel >/dev/null; then
+    nvpmodel -q 2>/dev/null | head -1 | sed 's/^/    power mode: /' || true
+  fi
+fi
 if is_ookla; then
   say "Ookla Speedtest CLI already present: $(speedtest --version 2>&1 | head -1)"
   ENGINES+=("ookla")
@@ -104,10 +117,25 @@ elif [[ "$ARCH" == "armhf" || "$ARCH" == "i386" ]]; then
 else
   say "Installing the official Ookla Speedtest CLI"
   # packagecloud's script keys off the distro id. On Raspberry Pi OS that is
-  # 'raspbian', for which Ookla has no repository, so pin it to Debian.
-  CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-bookworm}")"
+  # 'raspbian', for which Ookla has no repository, so pin it to Debian. Ubuntu
+  # (which is what a Jetson runs) must stay 'ubuntu': there is no debian/jammy,
+  # and pairing the two gives a repository apt cannot read.
+  # shellcheck source=/dev/null
+  OS_ID="$(. /etc/os-release && echo "${ID:-debian}")"
+  # shellcheck source=/dev/null
+  OS_LIKE="$(. /etc/os-release && echo "${ID_LIKE:-}")"
+  if [[ "$OS_ID" == "ubuntu" || " $OS_LIKE " == *" ubuntu "* ]]; then
+    PC_OS=ubuntu
+    # shellcheck source=/dev/null
+    CODENAME="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-${VERSION_CODENAME:-jammy}}")"
+  else
+    PC_OS=debian
+    # shellcheck source=/dev/null
+    CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-bookworm}")"
+  fi
+  say "Using Ookla's $PC_OS/$CODENAME repository"
   if curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh \
-       | os=debian dist="$CODENAME" bash; then
+       | os="$PC_OS" dist="$CODENAME" bash; then
     # Never leave a repository behind that apt cannot read — it would break
     # every future `apt update` on this machine, not just this install.
     if apt-get update; then
@@ -137,13 +165,22 @@ install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$DATA_DIR/.ssh"
 install -d -m 0755 "$CONF_DIR"
 
 # ---------------------------------------------------- unprivileged ICMP
-say "Allowing unprivileged ICMP for group $SERVICE_USER"
 GID="$(id -g "$SERVICE_USER")"
-cat >/etc/sysctl.d/60-broadband-monitor.conf <<EOF
+# Ubuntu (and so every Jetson) already ships "0 2147483647": everyone may ping.
+# Writing "$GID $GID" over that would NARROW it and break unprivileged ping for
+# every other account on the machine, so only ever widen, never replace.
+read -r PING_LO PING_HI < <(sysctl -n net.ipv4.ping_group_range 2>/dev/null || echo "1 0")
+if (( GID >= PING_LO && GID <= PING_HI )); then
+  say "Unprivileged ICMP already allowed for group $SERVICE_USER ($PING_LO-$PING_HI)"
+  rm -f /etc/sysctl.d/60-broadband-monitor.conf
+else
+  say "Allowing unprivileged ICMP for group $SERVICE_USER"
+  cat >/etc/sysctl.d/60-broadband-monitor.conf <<EOF
 # Lets the broadband-monitor service open ICMP datagram sockets without root.
 net.ipv4.ping_group_range = $GID $GID
 EOF
-sysctl -q --system || warn "sysctl reload failed; ping may need CAP_NET_RAW"
+  sysctl -q --system || warn "sysctl reload failed; ping may need CAP_NET_RAW"
+fi
 
 # ------------------------------------------------------------ application
 # Running from a home directory needs two things the default install does not:
@@ -154,6 +191,12 @@ IN_HOME=0
 case "$APP_DIR" in
   /home/*|/root/*|/Users/*) IN_HOME=1; PROTECT_HOME=no ;;
 esac
+# A checkout you edit (in-place anywhere, or any dir under /home) stays yours,
+# with the service user let in via your group. Only a dedicated copy (the /opt
+# default) is handed to the service user outright. Keying this on /home alone
+# would chown an in-place clone on /mnt/nvme or /srv away from you.
+SHARED=$IN_HOME
+[[ "$SRC_DIR" == "$APP_DIR" ]] && SHARED=1
 
 if [[ "$SRC_DIR" == "$APP_DIR" ]]; then
   say "Running in place from $APP_DIR (no copy)"
@@ -165,7 +208,7 @@ else
   cp -a "$SRC_DIR/config" "$APP_DIR/"
 fi
 
-if [[ $IN_HOME -eq 1 ]]; then
+if [[ $SHARED -eq 1 ]]; then
   OWNER="$(stat -c '%U' "$APP_DIR")"
   OWNER_GROUP="$(stat -c '%G' "$APP_DIR")"
   say "Granting $SERVICE_USER access to $APP_DIR (owned by $OWNER)"
@@ -219,7 +262,7 @@ say "Creating the Python virtualenv"
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
 "$APP_DIR/.venv/bin/pip" install --quiet PyYAML requests dnspython
-if [[ $IN_HOME -eq 1 ]]; then
+if [[ $SHARED -eq 1 ]]; then
   chown -R "$OWNER:$OWNER_GROUP" "$APP_DIR/.venv"
   chmod -R g+rX "$APP_DIR/.venv"
 else

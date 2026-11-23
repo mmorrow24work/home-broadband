@@ -8,10 +8,11 @@ add Ookla's apt repository on Raspberry Pi OS.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import time
 from typing import Any
+
+from ..paths import find_binary
 
 
 class OoklaNotInstalled(RuntimeError):
@@ -73,7 +74,7 @@ def parse_result(payload: str) -> dict[str, Any]:
 
 def build_command(settings: dict[str, Any]) -> list[str]:
     binary = settings.get("binary") or "speedtest"
-    resolved = shutil.which(binary)
+    resolved = find_binary(binary)
     if not resolved:
         raise OoklaNotInstalled(
             f"{binary!r} not found on PATH. Install the official Ookla CLI "

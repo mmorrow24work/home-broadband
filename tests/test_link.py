@@ -1,6 +1,14 @@
 """A 92 Mbps result on a 100 Mbit NIC is the Pi's limit, not the ISP's."""
 
+import pytest
+
 from collector import link
+
+
+@pytest.fixture(autouse=True)
+def _linux(monkeypatch):
+    """These exercise the /sys/class/net path; Windows has its own tests."""
+    monkeypatch.setattr(link, "IS_WINDOWS", False)
 
 
 def test_no_caveat_when_link_speed_is_unknown(monkeypatch):

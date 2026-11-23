@@ -278,3 +278,19 @@ def test_copy_contents_is_recursive_and_overwrites(tmp_path):
 
     copy_contents(src, dst)
     assert (dst / "one" / "two" / "deep.txt").read_text() == "new"
+
+
+def test_sync_code_leaves_someone_elses_checkout_alone(tmp_path, monkeypatch):
+    """An --in-place clone belongs to the human; a service-user pull leaves
+    files in .git they cannot overwrite (seen on a Jetson: FETCH_HEAD, 0644)."""
+    import os
+
+    import pytest
+
+    from collector import publish as pub
+
+    if not hasattr(os, "geteuid"):
+        pytest.skip("POSIX ownership only")
+    assert pub.owned_by_someone_else(tmp_path) is False
+    monkeypatch.setattr(os, "geteuid", lambda: os.stat(tmp_path).st_uid + 1)
+    assert pub.owned_by_someone_else(tmp_path) is True

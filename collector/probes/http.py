@@ -7,6 +7,7 @@ Python dependencies onto the Pi.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -108,7 +109,7 @@ def probe(target: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         "--show-error",
         "--location",
         "--output",
-        "/dev/null",
+        os.devnull,  # "nul" on Windows, where curl.exe ships with the OS
         "--max-time",
         str(timeout),
         "--user-agent",

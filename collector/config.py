@@ -10,8 +10,10 @@ from typing import Any
 
 import yaml
 
+from .paths import APP_DIR, CONFIG_FILE, DATA_DIR
+
 DEFAULT_PATHS = [
-    Path("/etc/broadband-monitor/config.yaml"),
+    CONFIG_FILE,
     Path(__file__).resolve().parent.parent / "config" / "config.yaml",
     Path(__file__).resolve().parent.parent / "config" / "config.example.yaml",
 ]
@@ -32,7 +34,7 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "database": {
-        "path": "/var/lib/broadband-monitor/broadband.db",
+        "path": str(DATA_DIR / "broadband.db"),
         "retention_days": 1095,
     },
     "latency": {
@@ -73,8 +75,8 @@ DEFAULTS: dict[str, Any] = {
         "interval_minutes": 60,
         "remote": "",
         "branch": "gh-pages",
-        "repo_dir": "/opt/broadband-monitor",
-        "work_dir": "/var/lib/broadband-monitor/pages",
+        "repo_dir": str(APP_DIR),
+        "work_dir": str(DATA_DIR / "pages"),
         "squash": True,
         "sync_code": True,
         "bucket_seconds": 300,
@@ -82,6 +84,9 @@ DEFAULTS: dict[str, Any] = {
         "keep_daily_days": 400,
         "git_user_name": "broadband-monitor",
         "git_user_email": "broadband-monitor@users.noreply.github.com",
+        # Optional deploy key for the push. Linux sets GIT_SSH_COMMAND in the
+        # systemd unit instead; Windows scheduled tasks have nowhere to put it.
+        "ssh_key": "",
     },
 }
 

@@ -1,7 +1,14 @@
 # home-broadband
 
 Continuous broadband quality monitoring from a Raspberry Pi, published as a
-static site on GitHub Pages.
+static site on GitHub Pages. The same code also runs on an **NVIDIA Jetson**
+(Tegra, Ubuntu/L4T), on any systemd Debian or Ubuntu box, and on **Windows 10/11**.
+
+| Platform | Installer | Scheduler |
+|---|---|---|
+| Raspberry Pi OS, Debian, Ubuntu | `sudo ./scripts/install.sh --in-place` | systemd timers |
+| NVIDIA Jetson (JetPack / L4T, Ubuntu 20.04+) | `sudo ./scripts/install.sh --in-place` | systemd timers |
+| Windows 10 / 11 | `.\scripts\install-windows.ps1` (elevated) | Task Scheduler — see [docs/WINDOWS.md](docs/WINDOWS.md) |
 
 A Pi wired to your router measures **throughput**, **round-trip latency**,
 **packet loss**, **DNS resolution time** and **web response time** against a
@@ -101,6 +108,41 @@ journalctl -u broadband-publish -n 30 --no-pager
 
 Finally set **Settings → Pages → Source = Deploy from a branch → `gh-pages` /
 (root)**. Full walkthrough including DNS: **[docs/INSTALL.md](docs/INSTALL.md)**.
+
+### On an NVIDIA Jetson
+
+Identical to the Pi: clone, `sudo ./scripts/install.sh --in-place`. The
+installer recognises the board and handles three Jetson-specific details:
+
+* It installs Ookla from the **Ubuntu** repository that matches your L4T
+  release, so a JetPack 6 board gets `jammy`. arm64 is supported, so all three
+  engines are available.
+* Ubuntu already lets every group send unprivileged ICMP. The installer leaves
+  that setting alone instead of narrowing it to the service user.
+* Clones that sit behind a symlink resolve to their real path. A common layout
+  is `~/git` → `/mnt/nvme/git`, and systemd and the file permissions need the
+  real location.
+
+The link-speed check uses the real default route (`enP1p5s0`, `eth0`, …) and
+skips the always-present `l4tbr0` USB-gadget bridge. Set the power mode to
+maximum (`sudo nvpmodel -m 0`) if you want throughput tests to keep up with a
+multi-gigabit line.
+
+### On Windows 10 / 11
+
+From an elevated PowerShell, after `winget install -e --id Python.Python.3.12`
+and `winget install -e --id Git.Git`:
+
+```powershell
+git clone https://github.com/mmorrow24work/home-broadband.git $HOME\git\home-broadband
+cd $HOME\git\home-broadband
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install-windows.ps1 -InstallOokla
+```
+
+The installer registers four scheduled tasks that run as SYSTEM. The config is
+at `C:\ProgramData\broadband-monitor\config.yaml`. Full guide:
+**[docs/WINDOWS.md](docs/WINDOWS.md)**.
 
 ### Preview the dashboard before the Pi has any data
 
@@ -302,10 +344,11 @@ collector/          the Python collector
   probes/           ping, dns, http, ookla, speedtest_cli, cloudflare
 site/               the dashboard (published as-is)
 systemd/            service + timer units
-scripts/            install.sh, uninstall.sh, seed_demo.py
+scripts/            install.sh / uninstall.sh (Linux), install-windows.ps1 /
+                    uninstall-windows.ps1 (Windows), seed_demo.py
 config/             the documented example config
 tests/              pytest suite (parsers, config, export, outage logic)
-docs/               install runbook, operations, design notes
+docs/               install runbook, Windows guide, operations, design notes
 ```
 
 ## What it can and cannot tell you
@@ -333,23 +376,31 @@ is still meaningful.
 
 ### Hardware
 
-Any Pi runs the collector. Which one you pick decides only the throughput
-ceiling:
+Any Pi runs the collector, and so does a Jetson or a Windows PC. Which one you
+pick decides only the throughput ceiling:
 
 | Board | Ethernet | Usable throughput |
 |---|---|---|
 | Pi 1, 2, 3, Zero 2 W | 100 Mbit | ≈ 94 Mbps |
 | Pi 3B+ | Gigabit over USB 2.0 | ≈ 230 Mbps |
 | Pi 4, 5, CM4 | true Gigabit | ≈ 940 Mbps |
+| NVIDIA Jetson Xavier / Orin (JetPack 5+) | Gigabit (AGX Orin: up to 10 GbE) | ≈ 940 Mbps on a Gigabit port |
+| Windows PC | whatever the NIC negotiates | the NIC's rate |
 
-Check what you have with `cat /proc/device-tree/model` and confirm the
-negotiated speed with `cat /sys/class/net/eth0/speed`. Note that only the Pi 3
+The original Jetson Nano is stuck on JetPack 4 (Ubuntu 18.04, Python 3.6) and
+is too old for the collector, which needs Python 3.9+.
+
+Check what you have with `cat /proc/device-tree/model`, then confirm the
+negotiated speed with `cat /sys/class/net/$(ip -o route show default | awk '{print $5; exit}')/speed`.
+The interface isn't always `eth0`: a Jetson's is often `enP1p5s0`. On Windows,
+use `Get-NetAdapter | ft Name, LinkSpeed`. Note that only the Pi 3
 and later can run 64-bit Raspberry Pi OS, and 64-bit is what the official Ookla
 client needs — a Pi 1 or 2 is `armhf` forever.
 
 ### Software
 
-* A systemd-based Debian derivative, on **Ethernet** — Wi-Fi measures Wi-Fi
+* A systemd-based Debian derivative (Raspberry Pi OS, Debian, Ubuntu,
+  Jetson L4T) **or Windows 10/11**, on **Ethernet** — Wi-Fi measures Wi-Fi
 * Python 3.9+
 * `iputils-ping`, `curl`, `git`, `dnsutils` — installed by `install.sh`
 * At least one throughput engine — `install.sh` sets up whichever are available:

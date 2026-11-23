@@ -8,7 +8,7 @@ PURGE=0
 [[ $EUID -eq 0 ]] || { echo "run me with sudo" >&2; exit 1; }
 
 CONF_DIR=/etc/broadband-monitor
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"   # real path, as install.sh records it
 
 # install.sh records where it put things; fall back to the default.
 APP_DIR_INSTALLED=/opt/broadband-monitor

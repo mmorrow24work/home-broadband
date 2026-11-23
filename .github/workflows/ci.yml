@@ -34,6 +34,42 @@ jobs:
       - name: Test
         run: pytest
 
+  windows:
+    # The collector runs on Windows 10/11 too: ping.exe, curl.exe, Task Scheduler.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Test
+        run: pytest
+
+      - name: Parse the PowerShell installers
+        shell: powershell   # Windows PowerShell 5.1, what install-windows.ps1 targets
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem scripts\*.ps1) {
+            $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs) | Out-Null
+            foreach ($e in $errs) { Write-Host "$($f.Name):$($e.Extent.StartLineNumber): $($e.Message)"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+          "PowerShell scripts parse cleanly"
+
+      - name: Live probe smoke test
+        run: |
+          python -c "from collector import link; print(link.describe())"
+          python -c "from collector.probes import ping; r = ping.probe({'name': 'cf', 'host': '1.1.1.1'}, {}); print(r)"
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:

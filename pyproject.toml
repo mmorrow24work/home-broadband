@@ -1,9 +1,14 @@
 [project]
 name = "home-broadband"
 version = "1.0.0"
-description = "24/7 home broadband throughput, latency and packet-loss monitoring for a Raspberry Pi"
+description = "24/7 home broadband throughput, latency and packet-loss monitoring for Raspberry Pi, NVIDIA Jetson, Linux and Windows"
 requires-python = ">=3.9"
-dependencies = ["PyYAML>=6.0", "requests>=2.31", "dnspython>=2.4"]
+dependencies = [
+    "PyYAML>=6.0",
+    "requests>=2.31",
+    "dnspython>=2.4",
+    "tzdata>=2024.1; sys_platform == 'win32'",
+]
 
 [tool.ruff]
 line-length = 100

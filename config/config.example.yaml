@@ -1,7 +1,9 @@
 # ---------------------------------------------------------------------------
 # home-broadband — collector configuration
 #
-# Copy to /etc/broadband-monitor/config.yaml and edit.
+# Copy to /etc/broadband-monitor/config.yaml (Linux: Pi, Jetson, Debian, Ubuntu)
+# or C:\ProgramData\broadband-monitor\config.yaml (Windows) and edit. The
+# installers do this for you and rewrite the paths below for the platform.
 # Every value below is the built-in default unless marked CHANGE ME.
 # ---------------------------------------------------------------------------
 
@@ -66,7 +68,7 @@ latency:
   # primary : true on exactly one target — drives the big "current ping" tile
   targets:
     - name: "Router"
-      host: "192.168.1.1"          # CHANGE ME if your gateway differs
+      host: "192.168.1.5"          # CHANGE ME if your gateway differs
       group: "lan"
       checks: [icmp]
 
@@ -217,10 +219,13 @@ publish:
   remote: "git@github.com:mmorrow24work/home-broadband.git"   # CHANGE ME
   branch: "gh-pages"
 
-  # Where this repo is checked out on the Pi (source of site/ assets).
+  # Where this repo is checked out on the collector (source of site/ assets).
   repo_dir: "/opt/broadband-monitor"
   # Scratch clone the publisher pushes from.
   work_dir: "/var/lib/broadband-monitor/pages"
+  # Deploy key used for the push. Leave "" on Linux, where the systemd unit
+  # pins the key itself; install-windows.ps1 sets it, as Task Scheduler cannot.
+  ssh_key: ""
 
   # Keep the published branch at exactly one commit and force-push it.
   # The Pi's SQLite file is the source of truth, so published history has no
@@ -228,7 +233,8 @@ publish:
   squash: true
 
   # git pull the code repo before each publish so a push to main updates the
-  # live site within one publish interval.
+  # live site within one publish interval. Skipped automatically when repo_dir
+  # belongs to another account (an --in-place clone): `git pull` it yourself.
   sync_code: true
 
   # Aggregation resolution for archived days (seconds). 300 = 5-minute buckets.

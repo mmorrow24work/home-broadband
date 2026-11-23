@@ -18,6 +18,7 @@ import argparse
 import concurrent.futures
 import datetime as dt
 import logging
+import logging.handlers
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ from typing import Any
 
 from . import __version__, db, link
 from .config import VALID_ENGINES, Config, ConfigError, load_config
+from .paths import CONFIG_FILE
 from .probes import cloudflare, ookla, ping, speedtest_cli
 from .probes import dns as dns_probe
 from .probes import http as http_probe
@@ -40,11 +42,27 @@ SPEED_ENGINES = {
 }
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(verbose: bool = False, log_file: str | None = None) -> None:
+    """Log to stderr (systemd's journal on Linux), plus a file if asked.
+
+    Windows Task Scheduler throws a task's output away, so the scheduled tasks
+    pass --log-file. One file per subcommand keeps writers from colliding.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file:
+        from pathlib import Path
+
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+            )
+        )
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
+        handlers=handlers,
     )
 
 
@@ -258,7 +276,7 @@ def cmd_servers(cfg: Config, args: argparse.Namespace) -> int:
     if len(matching) > args.limit:
         print(f"... and {len(matching) - args.limit} more (raise --limit)")
 
-    print("\nPin one in /etc/broadband-monitor/config.yaml:")
+    print(f"\nPin one in {cfg.source or CONFIG_FILE}:")
     print("  speed:")
     print("    speedtest-cli:")
     print(f"      server_id: {matching[0]['id']}")
@@ -331,6 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-c", "--config", help="path to config.yaml")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--log-file", help="also append logs to this file (rotated at 2 MB)")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -374,7 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    setup_logging(args.verbose)
+    setup_logging(args.verbose, args.log_file)
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:

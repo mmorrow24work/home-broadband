@@ -7,9 +7,11 @@ End to end, from a fresh Pi to a live dashboard on your own domain. Allow about
 
 ## 0. Before you start
 
-* A Raspberry Pi **wired to the router over Ethernet**. Wi-Fi measurements
-  characterise your Wi-Fi, not your line, and an ISP will say so immediately.
-* Raspberry Pi OS Bookworm or later (any systemd Debian derivative works).
+* A Raspberry Pi or NVIDIA Jetson **wired to the router over Ethernet**. Wi-Fi
+  measurements characterise your Wi-Fi, not your line, and an ISP will say so
+  immediately. (On Windows, follow [WINDOWS.md](WINDOWS.md) instead of this page.)
+* Raspberry Pi OS Bookworm or later, or a Jetson on JetPack 5/6 (Ubuntu 20.04 /
+  22.04). Any systemd Debian or Ubuntu derivative works.
 * A GitHub repository. It can be public or private — but **GitHub Pages on a
   private repo requires a paid plan**, so a public repo is the usual choice.
   Nothing sensitive is published: speeds, latencies, your ISP name and the
@@ -18,6 +20,31 @@ End to end, from a fresh Pi to a live dashboard on your own domain. Allow about
 
 Give the Pi a static lease on the router. A monitor that changes IP is annoying
 to reach and its ARP churn shows up in your own measurements.
+
+### NVIDIA Jetson notes
+
+Everything on this page applies to a Jetson unchanged. Things the installer
+handles for you, and things to know:
+
+* **Ookla** comes from Ookla's `ubuntu/<codename>` repository. JetPack 6 is
+  `jammy`, JetPack 5 is `focal`. Older versions of the installer asked for
+  `debian/jammy`, which does not exist, so the Ookla engine never installed.
+* **Unprivileged ping** already works on Ubuntu (`net.ipv4.ping_group_range =
+  0 2147483647`). The installer only adds a sysctl drop-in if the service user's
+  group is outside that range, so it never narrows it for other accounts.
+* **Clones on an NVMe or SD card behind a symlink** (`~/git` → `/mnt/nvme/git`)
+  are resolved to the real path before the units are written. An `--in-place`
+  clone outside `/home` still stays owned by you; it is shared with the service
+  user through your group, exactly like a clone in your home directory.
+* **Interface names** are not `eth0`. An Orin's onboard port is typically
+  `enP1p5s0`, and there is always a `l4tbr0` USB-gadget bridge with a
+  `linkdown` default route. The collector picks the lowest-metric default
+  route that is up.
+* **Power mode:** `sudo nvpmodel -q` shows it. A low-power mode caps the CPU
+  and can under-report multi-gigabit throughput. `sudo nvpmodel -m 0` sets
+  maximum.
+* **The `Router` target** in the example config is `192.168.1.1`. Check yours
+  with `ip route | grep default` and edit it.
 
 ---
 

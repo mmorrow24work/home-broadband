@@ -15,6 +15,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+# install.sh is bash + sed + systemd; Windows has install-windows.ps1 instead.
+pytestmark = pytest.mark.skipif(
+    __import__("sys").platform == "win32", reason="Linux installer"
+)
+
 ROOT = Path(__file__).resolve().parent.parent
 INSTALL = ROOT / "scripts" / "install.sh"
 UNITS = sorted((ROOT / "systemd").glob("*.service")) + sorted((ROOT / "systemd").glob("*.timer"))

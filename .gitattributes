@@ -1,0 +1,9 @@
+# Shell scripts and systemd units must keep LF even when cloned on Windows,
+# or bash fails on "\r" and the Pi/Jetson install breaks after a round trip.
+*.sh      text eol=lf
+*.service text eol=lf
+*.timer   text eol=lf
+*.py      text eol=lf
+*.yaml    text eol=lf
+# The installer's (?m)^...$ edits to config.yaml rely on LF there too.
+*.png     binary

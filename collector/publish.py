@@ -19,6 +19,7 @@ import datetime as dt
 import json
 import logging
 import math
+import os
 import shutil
 import subprocess
 import time
@@ -491,9 +492,28 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # git plumbing
 # ---------------------------------------------------------------------------
-def _git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
+def git_ssh_command(key: str, known_hosts: str | None = None) -> str:
+    """GIT_SSH_COMMAND that pins one deploy key and never prompts.
+
+    Forward slashes on purpose: Git for Windows splits this string with a POSIX
+    shell, which would eat the backslashes of C:\\ProgramData\\... paths.
+    """
+    key_s = str(key).replace("\\", "/")
+    known = str(known_hosts).replace("\\", "/") if known_hosts else (
+        key_s.rsplit("/", 1)[0] + "/known_hosts" if "/" in key_s else "known_hosts"
+    )
+    return (
+        f'ssh -i "{key_s}" -o IdentitiesOnly=yes '
+        f'-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="{known}"'
+    )
+
+
+def _git(
+    args: list[str], cwd: Path, check: bool = True, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     proc = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False, timeout=300
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False, timeout=300,
+        env=env,
     )
     if check and proc.returncode != 0:
         raise RuntimeError(
@@ -543,13 +563,21 @@ def push(cfg: Config, tree: Path) -> None:
     remote = cfg.get("publish.remote")
     squash = bool(cfg.get("publish.squash", True))
 
+    # The systemd unit sets GIT_SSH_COMMAND itself; publish.ssh_key exists for
+    # schedulers that cannot (Windows Task Scheduler) and overrides it if set.
+    env = None
+    if cfg.get("publish.ssh_key"):
+        env = {**os.environ, "GIT_SSH_COMMAND": git_ssh_command(cfg.get("publish.ssh_key"))}
+
     repo.mkdir(parents=True, exist_ok=True)
     if not (repo / ".git").exists():
         log.info("initialising publish repo at %s", repo)
         _git(["init", "-q", "-b", branch], repo)
         _git(["remote", "add", "origin", remote], repo)
         if not squash:
-            fetch = _git(["fetch", "--depth", "1", "origin", branch], repo, check=False)
+            fetch = _git(
+                ["fetch", "--depth", "1", "origin", branch], repo, check=False, env=env
+            )
             if fetch.returncode == 0:
                 _git(["reset", "--hard", f"origin/{branch}"], repo)
     else:
@@ -568,7 +596,7 @@ def push(cfg: Config, tree: Path) -> None:
         _git(["add", "-A"], repo)
         _git(["commit", "-q", "-m", message], repo)
         _git(["branch", "-M", branch], repo)
-        _git(["push", "--force", "origin", branch], repo)
+        _git(["push", "--force", "origin", branch], repo, env=env)
     else:
         _git(["add", "-A"], repo)
         status = _git(["status", "--porcelain"], repo)
@@ -576,9 +604,19 @@ def push(cfg: Config, tree: Path) -> None:
             log.info("no changes to publish")
             return
         _git(["commit", "-q", "-m", message], repo)
-        _git(["push", "origin", f"HEAD:{branch}"], repo)
+        _git(["push", "origin", f"HEAD:{branch}"], repo, env=env)
 
     log.info("pushed %s to %s", branch, remote)
+
+
+def owned_by_someone_else(path: Path) -> bool:
+    """True when path's owner is not the running user (POSIX only)."""
+    if not hasattr(os, "geteuid"):
+        return False  # Windows: ACLs inherit, and SYSTEM may pull the clone
+    try:
+        return path.stat().st_uid != os.geteuid()
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -598,9 +636,16 @@ def publish(cfg: Config, dry_run: bool = False, export_only: bool = False) -> in
         return 0
 
     if cfg.get("publish.sync_code") and (repo_dir / ".git").is_dir():
-        pull = _git(["pull", "--ff-only", "-q"], repo_dir, check=False)
-        if pull.returncode != 0:
-            log.warning("code sync skipped: %s", (pull.stderr or "").strip()[:200])
+        if owned_by_someone_else(repo_dir):
+            # An --in-place checkout belongs to the human who edits it. A pull by
+            # the service user leaves files in .git the human cannot overwrite
+            # (FETCH_HEAD, new object dirs) and fails on their uncommitted work;
+            # their own `git pull` is the update path there.
+            log.info("code sync skipped: %s belongs to another user", repo_dir)
+        else:
+            pull = _git(["pull", "--ff-only", "-q"], repo_dir, check=False)
+            if pull.returncode != 0:
+                log.warning("code sync skipped: %s", (pull.stderr or "").strip()[:200])
 
     work = Path(cfg.get("publish.work_dir"))
     tree = work / "tree"
