@@ -20,4 +20,7 @@ ignore = ["B008", "SIM108"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Bare `pytest` (as CI runs it) does not put the repo root on sys.path;
+# `python -m pytest` does. Make both find the collector package.
+pythonpath = ["."]
 addopts = "-q"
