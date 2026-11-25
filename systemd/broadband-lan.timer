@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the local-network (Wi-Fi) throughput test hourly
+
+[Timer]
+OnBootSec=10min
+# :45 - clear of the hourly speed test (:00-:05) and of both publish schedules
+# (:00/:20/:40 Windows, :10/:30/:50 Linux). Does nothing until lan.server is set.
+OnCalendar=*:45
+RandomizedDelaySec=60
+AccuracySec=1min
+Persistent=false
+Unit=broadband-lan.service
+
+[Install]
+WantedBy=timers.target

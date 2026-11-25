@@ -163,6 +163,27 @@ latency:
       url: "https://status.claude.com/api/v2/status.json"
 
 # ---------------------------------------------------------------------------
+# Local-network throughput (iperf3) — mainly for a Wi-Fi collector.
+# Tests against a WIRED machine on the same LAN running `iperf3 -s`, so the
+# internet is not involved and the result is the Wi-Fi alone. Side by side with
+# the internet throughput chart it shows which of the two is the bottleneck.
+# Runs hourly at :45 for a few seconds each way; the Wi-Fi band, channel,
+# signal and link rates are recorded with every result. Kept short on purpose:
+# a long saturating test can trip a router's flood protection and make it drop
+# this machine's pings for minutes, which would read as an outage.
+# On the server:  iperf3 -s -D   (e.g. from cron: @reboot /usr/bin/iperf3 -s -D)
+# ---------------------------------------------------------------------------
+lan:
+  enabled: false
+  server: ""            # e.g. "192.168.1.184" — a wired box running iperf3 -s
+  port: 5201
+  seconds: 5            # per direction
+  streams: 4
+  # Windows: found automatically in winget's folder or
+  # C:\ProgramData\broadband-monitor\bin; otherwise give the full path.
+  binary: "iperf3"
+
+# ---------------------------------------------------------------------------
 # Throughput testing — expensive. Read the data-usage note in the README.
 # ---------------------------------------------------------------------------
 speed:

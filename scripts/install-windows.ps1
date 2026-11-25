@@ -272,6 +272,8 @@ Register-Collector 'speed'   (New-ScheduledTaskTrigger -Once -At $today.AddMinut
 Register-Collector 'publish' (New-ScheduledTaskTrigger -Once -At $today -RepetitionInterval (New-TimeSpan -Minutes 20) -RandomDelay (New-TimeSpan -Minutes 1)) (New-TimeSpan -Minutes 15)
 Register-Collector 'prune'   (New-ScheduledTaskTrigger -Daily -At $today.AddHours(4).AddMinutes(17)) (New-TimeSpan -Minutes 30)
 # Tests requested from the dashboard: one git fetch a minute, half a minute off latency.
+# Wi-Fi-only throughput (iperf3 to a wired LAN box) at :45; a no-op until lan.server is set.
+Register-Collector 'lan'     (New-ScheduledTaskTrigger -Once -At $today.AddMinutes(45) -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay (New-TimeSpan -Minutes 1)) (New-TimeSpan -Minutes 5)
 Register-Collector 'control' (New-ScheduledTaskTrigger -Once -At $today.AddSeconds(30) -RepetitionInterval (New-TimeSpan -Minutes 1)) (New-TimeSpan -Minutes 20)
 
 Say 'Done.'

@@ -5,6 +5,7 @@ process is never long-lived and a crash can never wedge collection.
 
     python3 -m collector.main latency     # one probe sweep of all targets
     python3 -m collector.main speed       # one throughput test (engine alternates)
+    python3 -m collector.main lan         # iperf3 against a LAN box (Wi-Fi alone)
     python3 -m collector.main publish     # aggregate + push to GitHub Pages
     python3 -m collector.main control     # run a test requested from the dashboard
     python3 -m collector.main status      # human-readable summary
@@ -30,7 +31,7 @@ from typing import Any
 from . import __version__, control, db, link, lock
 from .config import VALID_ENGINES, Config, ConfigError, load_config
 from .paths import CONFIG_FILE
-from .probes import cloudflare, ookla, ping, speedtest_cli
+from .probes import cloudflare, iperf, ookla, ping, speedtest_cli
 from .probes import dns as dns_probe
 from .probes import http as http_probe
 
@@ -265,6 +266,41 @@ def _speed_locked(
     return 1, f"{row['engine']} failed: {str(row['error'])[:160]}"
 
 
+def cmd_lan(cfg: Config, args: argparse.Namespace) -> int:
+    """One local-network throughput test (Wi-Fi alone, when this box is on Wi-Fi)."""
+    settings = cfg.get("lan", {})
+    if not settings.get("enabled") or not settings.get("server"):
+        log.debug("lan test disabled or lan.server empty — nothing to do")
+        return 0
+    away = _away(cfg)
+    if away:
+        log.info("not on the home network (%s) — skipping the LAN test", away)
+        return 0
+    try:
+        # It saturates the same Wi-Fi an internet test would; never both at once.
+        with lock.held(_lock_path(cfg, "speed"), wait=0):
+            row = iperf.run(settings)
+    except lock.Busy:
+        log.info("a throughput test is running — skipping the LAN test")
+        return 0
+
+    radio = ""
+    if row.get("channel"):
+        radio = (f" over {row['band']} ch {row['channel']}, {row['rssi_dbm']} dBm, "
+                 f"link {row['rx_rate_mbps']}/{row['tx_rate_mbps']} Mbps")
+    if args.dry_run:
+        log.info("%s", row)
+        return 0
+    with db.connect(cfg.db_path) as conn:
+        db.insert_lan(conn, row)
+    if not row["ok"]:
+        log.error("LAN test to %s failed: %s", row["server"], row["error"])
+        return 1
+    log.info("LAN test to %s: down %.1f / up %.1f Mbps%s",
+             row["server"], row["down_mbps"], row["up_mbps"], radio)
+    return 0
+
+
 def cmd_speed(cfg: Config, args: argparse.Namespace) -> int:
     code, _ = run_speed(cfg, args.engine, force=args.force, dry_run=args.dry_run)
     return code
@@ -443,7 +479,7 @@ def cmd_status(cfg: Config, _args: argparse.Namespace) -> int:
     with db.connect(cfg.db_path, readonly=True) as conn:
         counts = {
             table: conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
-            for table in ("latency", "dns", "http", "speed")
+            for table in ("latency", "dns", "http", "speed", "lan")
         }
         last_speed = conn.execute(
             "SELECT * FROM speed WHERE ok = 1 ORDER BY ts DESC LIMIT 1"
@@ -511,6 +547,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--export-only", action="store_true", help="write JSON into site/data and stop"
     )
     p_publish.set_defaults(func=cmd_publish)
+
+    p_lan = sub.add_parser("lan", help="one iperf3 test against lan.server (Wi-Fi alone)")
+    p_lan.add_argument("--dry-run", action="store_true", help="print, do not store")
+    p_lan.set_defaults(func=cmd_lan)
 
     p_control = sub.add_parser(
         "control", help="run a test requested from the dashboard, if there is one"

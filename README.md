@@ -66,6 +66,7 @@ Raspberry Pi (wired to the router)
 │   ├── broadband-speed.timer     hourly         ── Ookla → speedtest-cli → Cloudflare
 │   ├── broadband-publish.timer   every 20 min   ── aggregate + push
 │   ├── broadband-control.timer   every minute   ── run a test asked for on the dashboard
+│   ├── broadband-lan.timer       hourly         ── iperf3 to a wired LAN box (Wi-Fi alone; opt-in)
 │   └── broadband-prune.timer     daily          ── retention
 │
 ├── /var/lib/broadband-monitor/broadband.db      ── SQLite, system of record
@@ -337,6 +338,12 @@ GitHub Pages serves exactly what is in the branch.
   chart and a spike in the loss chart are visibly the same host.
 * The latency axis clips at the 99.5th percentile and says so, rather than
   letting three outliers flatten the everyday band into a straight line.
+* **Wi-Fi throughput, separately from the line.** A Wi-Fi collector can run a
+  short iperf3 test each hour against a wired machine on the LAN (`lan:` in
+  `config.yaml`; run `iperf3 -s -D` on the server, e.g. from `@reboot` in cron).
+  The internet is not involved, so the chart shows the Wi-Fi alone, with the
+  band, channel, signal and link rates of each run. Side by side with the
+  throughput chart it says whether the line or the Wi-Fi is the bottleneck.
 * **Run a test now.** Pick a test (throughput, the latency/DNS/web sweep, or
   both) and optionally an engine, and the collector being viewed runs it within
   a minute and publishes the result; the page follows it and redraws when it
@@ -373,6 +380,7 @@ $RUN speed --force --engine speedtest-cli   # or ookla / cloudflare
 $RUN servers                         # find a speedtest server worth pinning
 $RUN publish --dry-run               # build the site, do not push
 $RUN control                         # run a dashboard-requested test, if one is waiting
+$RUN lan --dry-run                   # iperf3 to lan.server once (Wi-Fi alone), print only
 $RUN prune                           # apply retention
 ```
 

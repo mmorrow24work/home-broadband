@@ -371,7 +371,7 @@ say "Verifying the installation"
 
 systemctl enable --now broadband-latency.timer broadband-speed.timer \
                         broadband-publish.timer broadband-prune.timer \
-                        broadband-control.timer
+                        broadband-control.timer broadband-lan.timer
 
 say "Done."
 

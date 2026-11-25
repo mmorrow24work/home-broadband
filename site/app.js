@@ -128,7 +128,7 @@
     // outages: null means "derive them from the raw samples"; an array means the
     // publisher already computed them at full resolution (bucketed files cannot
     // show a 90-second drop, so trusting the file beats re-deriving it here).
-    const dataset = { latency: {}, speed: {}, http: {}, resolution: 60, outages: null };
+    const dataset = { latency: {}, speed: {}, lan: {}, http: {}, resolution: 60, outages: null };
 
     if (range.source === "latest") {
       const latest = await fetchJSON(`${DATA}/latest.json`);
@@ -148,6 +148,11 @@
         .filter((i) => i >= 0);
       for (const key of Object.keys(speed)) {
         dataset.speed[key] = keepSpeed.map((i) => speed[key][i]);
+      }
+      const lan = latest.lan || {};
+      const keepLan = (lan.t || []).map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
+      for (const key of Object.keys(lan)) {
+        dataset.lan[key] = keepLan.map((i) => lan[key][i]);
       }
       for (const [name, series] of Object.entries(latest.http || {})) {
         const keep = series.t.map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
@@ -173,6 +178,7 @@
       dataset.resolution = payload.resolution || dataset.resolution;
       mergeSeries(dataset.latency, payload.latency);
       mergeColumns(dataset.speed, payload.speed);
+      mergeColumns(dataset.lan, payload.lan);
       mergeSeries(dataset.http, payload.http);
       const summary = payload.summary || {};
       for (const outage of summary.outages || []) {
@@ -696,6 +702,49 @@
     });
   }
 
+  function renderLanChart() {
+    const lan = state.dataset.lan || {};
+    const xs = lan.t || [];
+    const panel = $("#lan-panel");
+    panel.hidden = !xs.length;
+    if (!xs.length) return;
+
+    // The radio's state at the last good test: a slow result means little
+    // without knowing what band, channel and signal it ran on.
+    let last = -1;
+    for (let i = xs.length - 1; i >= 0; i--) {
+      if (lan.ok && lan.ok[i]) {
+        last = i;
+        break;
+      }
+    }
+    const pick = (key) => (lan[key] && last >= 0 ? lan[key][last] : null);
+    $("#lan-radio").textContent =
+      last < 0
+        ? "No successful test in this range."
+        : `Last test ${relative(xs[last])}: ${fmtNum(pick("down"), 0)} down / ${fmtNum(pick("up"), 0)} up Mbps` +
+          (pick("channel")
+            ? ` · ${pick("band")} channel ${pick("channel")}, signal ${fmtNum(pick("rssi"), 0)} dBm, ` +
+              `link rate ${fmtNum(pick("rx"), 0)} in / ${fmtNum(pick("tx"), 0)} out Mbps`
+            : "");
+    const server = (state.manifest.lan || {}).server;
+    if (server) $("#lan-server").textContent = server;
+
+    makeChart("#chart-lan", "#legend-lan", {
+      key: "lan",
+      xs,
+      series: [
+        { label: "Download (to this machine)", colour: cssVar("--series-1") },
+        { label: "Upload", colour: cssVar("--series-2") },
+      ],
+      columns: [lan.down || [], lan.up || []],
+      yLabel: "Mbps",
+      unit: " Mbps",
+      digits: 1,
+      range: (_u, _min, max) => [0, max * 1.1],
+    });
+  }
+
   function percentile(values, pct) {
     const clean = values.filter((v) => v !== null && v !== undefined).sort((a, b) => a - b);
     if (!clean.length) return null;
@@ -1152,6 +1201,7 @@
     for (const { chart } of state.charts) chart.destroy();
     state.charts = [];
     renderSpeedChart();
+    renderLanChart();
     renderLatencyChart();
     renderLossChart();
     renderTtfbChart();

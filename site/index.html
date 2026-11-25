@@ -109,6 +109,18 @@
     <div class="chart" id="chart-speed"></div>
   </section>
 
+  <section class="panel chart-panel" id="lan-panel" hidden>
+    <div class="chart-head">
+      <h2>Wi-Fi throughput</h2>
+      <p class="muted">iperf3 against <span id="lan-server">a wired machine</span> on the same network,
+        so the internet is not involved: the Wi-Fi alone. Compare with the throughput chart above to see
+        which of the two is the bottleneck.</p>
+    </div>
+    <p class="muted" id="lan-radio"></p>
+    <div class="legend" id="legend-lan"></div>
+    <div class="chart" id="chart-lan"></div>
+  </section>
+
   <section class="panel chart-panel">
     <div class="chart-head">
       <h2>Round-trip latency</h2>

@@ -85,6 +85,23 @@ CREATE TABLE IF NOT EXISTS speed (
 );
 CREATE INDEX IF NOT EXISTS idx_speed_engine ON speed(engine, ts);
 
+-- Local-network (usually Wi-Fi) throughput: iperf3 against a box on the LAN,
+-- with the radio's state at the time. See collector/probes/iperf.py.
+CREATE TABLE IF NOT EXISTS lan (
+    ts            INTEGER NOT NULL PRIMARY KEY,
+    server        TEXT    NOT NULL,
+    ok            INTEGER NOT NULL,
+    down_mbps     REAL,
+    up_mbps       REAL,
+    retransmits   INTEGER,
+    band          TEXT,
+    channel       INTEGER,
+    rssi_dbm      REAL,
+    rx_rate_mbps  REAL,
+    tx_rate_mbps  REAL,
+    error         TEXT
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     k TEXT PRIMARY KEY,
     v TEXT
@@ -160,6 +177,17 @@ def insert_http(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> None:
     )
 
 
+def insert_lan(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+    conn.execute(
+        """INSERT OR REPLACE INTO lan
+           (ts, server, ok, down_mbps, up_mbps, retransmits, band, channel,
+            rssi_dbm, rx_rate_mbps, tx_rate_mbps, error)
+           VALUES (:ts, :server, :ok, :down_mbps, :up_mbps, :retransmits, :band, :channel,
+                   :rssi_dbm, :rx_rate_mbps, :tx_rate_mbps, :error)""",
+        row,
+    )
+
+
 def insert_speed(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
     payload = dict(row)
     if isinstance(payload.get("raw"), (dict, list)):
@@ -202,7 +230,7 @@ def prune(conn: sqlite3.Connection, retention_days: int) -> dict[str, int]:
         return {}
     cutoff = int(time.time()) - retention_days * 86400
     deleted = {}
-    for table in ("latency", "dns", "http", "speed"):
+    for table in ("latency", "dns", "http", "speed", "lan"):
         cur = conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
         deleted[table] = cur.rowcount
     return deleted

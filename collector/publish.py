@@ -164,6 +164,24 @@ def export_speed(conn, start: int, end: int) -> dict[str, list]:
     return out
 
 
+def export_lan(conn, start: int, end: int) -> dict[str, list]:
+    """Local-network (Wi-Fi) tests, column-wise. Hourly at most, so never bucketed."""
+    rows = conn.execute(
+        """SELECT ts, ok, down_mbps, up_mbps, retransmits, band, channel,
+                  rssi_dbm, rx_rate_mbps, tx_rate_mbps, error
+           FROM lan WHERE ts >= ? AND ts < ? ORDER BY ts""",
+        (start, end),
+    ).fetchall()
+    keys = {"t": "ts", "ok": "ok", "down": "down_mbps", "up": "up_mbps",
+            "retrans": "retransmits", "band": "band", "channel": "channel",
+            "rssi": "rssi_dbm", "rx": "rx_rate_mbps", "tx": "tx_rate_mbps", "error": "error"}
+    out: dict[str, list] = {k: [] for k in keys}
+    for row in rows:
+        for key, column in keys.items():
+            out[key].append(_round(row[column], 2))
+    return out
+
+
 def export_http(conn, start: int, end: int, bucket: int | None) -> dict[str, Any]:
     if bucket:
         rows = conn.execute(
@@ -446,6 +464,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
             "resolution": int(cfg.get("latency.interval_seconds", 60)),
             "latency": export_latency(conn, latest_start, now + 1, None),
             "speed": export_speed(conn, latest_start, now + 1),
+            "lan": export_lan(conn, latest_start, now + 1),
             "http": export_http(conn, latest_start, now + 1, None),
             "dns": export_dns(conn, latest_start, now + 1, None),
         }
@@ -471,6 +490,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
                     "resolution": bucket,
                     "latency": latency,
                     "speed": speed,
+                    "lan": export_lan(conn, start, end),
                     "http": export_http(conn, start, end, bucket),
                     "dns": export_dns(conn, start, end, bucket),
                     "summary": window_summary(conn, cfg, start, end),
@@ -497,6 +517,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
                     "resolution": 3600,
                     "latency": latency,
                     "speed": speed,
+                    "lan": export_lan(conn, start, end),
                     "summary": window_summary(conn, cfg, start, end),
                 }
                 total_bytes += _write_json(
@@ -563,6 +584,7 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
         "months": months,
         "first_sample": first_ts,
         "control": control_info(cfg),
+        "lan": {"server": cfg.get("lan.server")} if cfg.get("lan.enabled") else None,
         "on_demand": _on_demand(cfg),
     }
     total_bytes += _write_json(data_dir / "manifest.json", manifest)

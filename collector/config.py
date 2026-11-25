@@ -97,6 +97,16 @@ DEFAULTS: dict[str, Any] = {
         # Full path to git if the scheduler cannot find it on PATH. "" = search.
         "git_binary": "",
     },
+    # Local-network throughput: iperf3 against a wired box running `iperf3 -s`.
+    # Off until lan.server is set. See collector/probes/iperf.py.
+    "lan": {
+        "enabled": False,
+        "server": "",
+        "port": 5201,
+        "seconds": 5,
+        "streams": 4,
+        "binary": "iperf3",
+    },
     # Gateways (IP and/or MAC) of the network this collector should measure.
     # Empty = measure wherever it is. Set on a laptop so a 4G hotspot or a hotel
     # does not end up in the line's history.
