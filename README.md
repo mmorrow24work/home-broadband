@@ -344,6 +344,7 @@ GitHub Pages serves exactly what is in the branch.
   The internet is not involved, so the chart shows the Wi-Fi alone, with the
   band, channel, signal and link rates of each run. Side by side with the
   throughput chart it says whether the line or the Wi-Fi is the bottleneck.
+  [docs/WIFI.md](docs/WIFI.md) is a worked example: diagnosing slow Wi-Fi, and why.
 * **Run a test now.** Pick a test (throughput, the latency/DNS/web sweep, or
   both) and optionally an engine, and the collector being viewed runs it within
   a minute and publishes the result; the page follows it and redraws when it
