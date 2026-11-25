@@ -113,6 +113,17 @@ From the usual desk, Wi-Fi only (iperf3 to the wired Jetson), on the Vodafone
 hub: **245 Mbps down / 475 up**; a later 5-second collector run read 217 / 290.
 At 1 m: ~400 / ~400.
 
+The first scheduled `lan` run (25 Nov 2026, 14:51, from the desk) read
+**225 down / 447 up** — 5 GHz channel 52, −61 dBm, link rate 390 in / 867 out.
+That is the "before" point on the dashboard's Wi-Fi throughput chart.
+
+## Status (25 Nov 2026)
+
+* The Jetson runs `iperf3 -s` on port 5201, started at boot from its crontab.
+* The Windows laptop collector runs the `lan` test hourly at about :45 and
+  skips it when off the home network.
+* The dashboard charts the results as **Wi-Fi throughput**.
+
 ## Repeating the measurement
 
 On the wired box, keep an iperf3 server running (survives reboots):
@@ -143,4 +154,3 @@ details of the latest run.
 ## Open items
 
 * Set up the Archer AX55 and measure it against the baseline above.
-* Make the Jetson's iperf3 server start at boot (the cron line above).
