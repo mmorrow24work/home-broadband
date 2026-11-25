@@ -6,6 +6,7 @@ process is never long-lived and a crash can never wedge collection.
     python3 -m collector.main latency     # one probe sweep of all targets
     python3 -m collector.main speed       # one throughput test (engine alternates)
     python3 -m collector.main publish     # aggregate + push to GitHub Pages
+    python3 -m collector.main control     # run a test requested from the dashboard
     python3 -m collector.main status      # human-readable summary
     python3 -m collector.main servers     # find a speedtest server worth pinning
     python3 -m collector.main init-db     # create the schema
@@ -23,9 +24,10 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
-from . import __version__, db, link
+from . import __version__, control, db, link, lock
 from .config import VALID_ENGINES, Config, ConfigError, load_config
 from .paths import CONFIG_FILE
 from .probes import cloudflare, ookla, ping, speedtest_cli
@@ -162,20 +164,50 @@ def _in_quiet_hours(cfg: Config, now: dt.datetime) -> bool:
     return False
 
 
-def cmd_speed(cfg: Config, args: argparse.Namespace) -> int:
+def _lock_path(cfg: Config, name: str) -> Path:
+    return Path(cfg.db_path).parent / f"{name}.lock"
+
+
+def run_speed(
+    cfg: Config,
+    engine: str | None = None,
+    *,
+    force: bool = False,
+    on_demand: bool = False,
+    dry_run: bool = False,
+) -> tuple[int, str]:
+    """One throughput test. Returns (exit code, one-line outcome).
+
+    An on-demand run was asked for by a person, so quiet hours do not apply,
+    but the daily data guard still does: it protects a metered bill.
+    """
     engines = cfg.get("speed.engines", ["ookla"])
     now = dt.datetime.now()
 
-    if _in_quiet_hours(cfg, now) and not args.force:
+    if _in_quiet_hours(cfg, now) and not (force or on_demand):
         log.info("inside speed.quiet_hours — skipping throughput test")
-        return 0
+        return 0, "skipped: quiet hours"
 
     db.init(cfg.db_path)
+    try:
+        # A scheduled test that finds another running gives way at once: the
+        # line is being measured already. An on-demand one waits its turn.
+        with lock.held(_lock_path(cfg, "speed"), wait=240 if on_demand else 0):
+            return _speed_locked(cfg, engines, engine, now, force, dry_run)
+    except lock.Busy:
+        log.info("another throughput test is running — skipping this one")
+        return 0, "skipped: another throughput test was running"
+
+
+def _speed_locked(
+    cfg: Config, engines: list[str], engine: str | None, now: dt.datetime,
+    force: bool, dry_run: bool,
+) -> tuple[int, str]:
     with db.connect(cfg.db_path) as conn:
-        engine = args.engine or db.next_engine(conn, engines)
+        engine = engine or db.next_engine(conn, engines)
 
         max_daily_gb = float(cfg.get("speed.max_daily_gb", 0) or 0)
-        if max_daily_gb and not args.force:
+        if max_daily_gb and not force:
             midnight = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
             used = db.bytes_used_since(conn, midnight)
             if used >= max_daily_gb * 1_000_000_000:
@@ -184,15 +216,15 @@ def cmd_speed(cfg: Config, args: argparse.Namespace) -> int:
                     used / 1e9,
                     max_daily_gb,
                 )
-                return 0
+                return 0, f"skipped: daily data limit of {max_daily_gb:g} GB reached"
 
         config_key, runner = SPEED_ENGINES[engine]
         log.info("running %s throughput test", engine)
         row = runner(cfg.get(config_key, {}))
 
-        if args.dry_run:
+        if dry_run:
             log.info("%s", row)
-            return 0
+            return 0, "dry run"
 
         db.insert_speed(conn, row)
 
@@ -209,10 +241,77 @@ def cmd_speed(cfg: Config, args: argparse.Namespace) -> int:
             row["server"],
             (row["bytes_down"] + row["bytes_up"]) / 1e9,
         )
-        return 0
+        return 0, (
+            f"{row['engine']}: {row['down_mbps'] or 0:.1f} down / "
+            f"{row['up_mbps'] or 0:.1f} up Mbps"
+        )
 
     log.error("%s test failed: %s", row["engine"], row["error"])
-    return 1
+    return 1, f"{row['engine']} failed: {str(row['error'])[:160]}"
+
+
+def cmd_speed(cfg: Config, args: argparse.Namespace) -> int:
+    code, _ = run_speed(cfg, args.engine, force=args.force, dry_run=args.dry_run)
+    return code
+
+
+# ---------------------------------------------------------------------------
+# on-demand tests
+# ---------------------------------------------------------------------------
+def cmd_control(cfg: Config, args: argparse.Namespace) -> int:
+    """Run a test someone asked for from the dashboard, then publish it."""
+    if not cfg.get("control.enabled") or not cfg.get("publish.remote"):
+        log.debug("control disabled or no publish.remote — nothing to check")
+        return 0
+
+    try:
+        raw = control.fetch_requests(cfg)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        log.warning("could not check for requested tests: %s", exc)
+        return 1
+
+    state = control.load_state(cfg)
+    max_age = int(cfg.get("control.max_age_minutes", 15)) * 60
+    chosen, skipped = control.select(
+        raw, state, cfg.get("speed.engines", []), max_age, int(time.time())
+    )
+    for req in skipped:
+        log.info("request %s %s", req["id"], req["outcome"])
+        control.record(state, req)
+    if chosen is None:
+        if skipped:
+            control.save_state(cfg, state)
+        return 0
+
+    log.info(
+        "running requested %s test %s%s", chosen["test"], chosen["id"],
+        f" (asked by {chosen['by']})" if chosen["by"] else "",
+    )
+    # Recorded before running, so a crash mid-test can never loop on it.
+    entry = control.record(state, {**chosen, "outcome": "running",
+                                   "started_at": int(time.time())})
+    control.save_state(cfg, state)
+
+    results, code = [], 0
+    if chosen["test"] in ("latency", "both"):
+        rc = cmd_latency(cfg, argparse.Namespace(dry_run=args.dry_run))
+        results.append("latency sweep stored" if rc == 0 else "latency sweep failed")
+        code = code or rc
+    if chosen["test"] in ("speed", "both"):
+        rc, message = run_speed(cfg, chosen["engine"], on_demand=True, dry_run=args.dry_run)
+        results.append(message)
+        code = code or rc
+
+    entry.update(
+        outcome="ok" if code == 0 else "failed",
+        finished_at=int(time.time()),
+        detail="; ".join(results),
+    )
+    control.save_state(cfg, state)
+
+    if args.dry_run or args.no_publish:
+        return code
+    return cmd_publish(cfg, argparse.Namespace(dry_run=False, export_only=False)) or code
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +320,13 @@ def cmd_speed(cfg: Config, args: argparse.Namespace) -> int:
 def cmd_publish(cfg: Config, args: argparse.Namespace) -> int:
     from .publish import publish  # imported lazily; keeps `speed` runs light
 
-    return publish(cfg, dry_run=args.dry_run, export_only=args.export_only)
+    # The timer and an on-demand run can both publish; they share a scratch repo.
+    try:
+        with lock.held(_lock_path(cfg, "publish"), wait=300):
+            return publish(cfg, dry_run=args.dry_run, export_only=args.export_only)
+    except lock.Busy:
+        log.warning("another publish has been running for 5 minutes — skipping this one")
+        return 1
 
 
 def cmd_setup_check(cfg: Config, args: argparse.Namespace) -> int:
@@ -381,6 +486,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--export-only", action="store_true", help="write JSON into site/data and stop"
     )
     p_publish.set_defaults(func=cmd_publish)
+
+    p_control = sub.add_parser(
+        "control", help="run a test requested from the dashboard, if there is one"
+    )
+    p_control.add_argument("--dry-run", action="store_true", help="print, do not store")
+    p_control.add_argument(
+        "--no-publish", action="store_true", help="store the result; leave publishing to the timer"
+    )
+    p_control.set_defaults(func=cmd_control)
 
     p_servers = sub.add_parser(
         "servers", help="list speedtest.net servers you could pin, filtered by country"

@@ -1,0 +1,32 @@
+[Unit]
+Description=Run a broadband test requested from the dashboard, if any
+Documentation=https://github.com/mmorrow24work/home-broadband
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=broadband
+Group=broadband
+WorkingDirectory=/opt/broadband-monitor
+Environment=BROADBAND_CONFIG=/etc/broadband-monitor/config.yaml
+# Same deploy key as the publisher: it fetches the control branch, and after a
+# requested test it publishes. MUST stay double-quoted (see broadband-publish.service).
+Environment="GIT_SSH_COMMAND=ssh -i /var/lib/broadband-monitor/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/broadband-monitor/.ssh/known_hosts"
+ExecStart=/opt/broadband-monitor/.venv/bin/python -m collector.main control
+# Waiting for a running scheduled test (4 min) + the test + a publish.
+TimeoutStartSec=1200
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/broadband-monitor /opt/broadband-monitor
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

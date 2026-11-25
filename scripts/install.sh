@@ -370,7 +370,8 @@ say "Verifying the installation"
   --config "$CONF_DIR/config.yaml" status)
 
 systemctl enable --now broadband-latency.timer broadband-speed.timer \
-                        broadband-publish.timer broadband-prune.timer
+                        broadband-publish.timer broadband-prune.timer \
+                        broadband-control.timer
 
 say "Done."
 

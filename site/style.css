@@ -197,6 +197,47 @@ a  { color: var(--series-1); }
   color: var(--surface-1); font-weight: 500;
 }
 
+/* ---------- run a test now ---------- */
+.run-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; }
+.run-form label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 0.74rem; color: var(--ink-muted);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.run-form label[hidden] { display: none; }
+.run-form select, .run-token-row input {
+  font: inherit; font-size: 0.88rem; text-transform: none; letter-spacing: 0;
+  color: var(--ink-1); background: var(--plane);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+}
+.primary-btn {
+  font: inherit; font-size: 0.88rem; font-weight: 500; cursor: pointer;
+  color: var(--surface-1); background: var(--ink-1);
+  border: 1px solid var(--ink-1); border-radius: 999px; padding: 7px 18px;
+}
+.primary-btn:disabled { opacity: 0.45; cursor: progress; }
+.run-status { margin-top: 10px; min-height: 1.3em; font-size: 0.85rem; max-width: 90ch; }
+.run-setup { margin-top: 12px; font-size: 0.85rem; }
+.run-setup summary { cursor: pointer; color: var(--ink-2); }
+.run-setup-body { margin-top: 8px; max-width: 80ch; }
+.run-setup-body ol { padding-left: 20px; margin: 8px 0; }
+.run-setup-body li { margin-bottom: 4px; }
+.run-token-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.run-token-row input { flex: 1 1 260px; min-width: 0; }
+.run-token-row button[hidden] { display: none; }
+.run-history h3 {
+  font-size: 0.74rem; font-weight: 500; color: var(--ink-muted); margin: 16px 0 6px;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.run-history ul { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+.run-history li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  padding: 6px 0; border-bottom: 1px solid var(--grid);
+}
+.run-history li:last-child { border-bottom: 0; }
+.run-history .tile-status { margin-top: 0; }
+.run-detail { flex-basis: 100%; }
+
 /* ---------- legend ---------- */
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 8px; }
 .legend-item {

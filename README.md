@@ -65,6 +65,7 @@ Raspberry Pi (wired to the router)
 │   ├── broadband-latency.timer   every minute   ── ICMP / DNS / HTTP sweep
 │   ├── broadband-speed.timer     hourly         ── Ookla → speedtest-cli → Cloudflare
 │   ├── broadband-publish.timer   every 20 min   ── aggregate + push
+│   ├── broadband-control.timer   every minute   ── run a test asked for on the dashboard
 │   └── broadband-prune.timer     daily          ── retention
 │
 ├── /var/lib/broadband-monitor/broadband.db      ── SQLite, system of record
@@ -75,7 +76,11 @@ Raspberry Pi (wired to the router)
 ```
 
 **Nothing is exposed on your network.** The Pi makes only outbound
-connections; there is no listener, no port forward and no inbound tunnel.
+connections; there is no listener, no port forward and no inbound tunnel. That
+holds for on-demand tests too: the dashboard's **Run a test now** button starts
+a GitHub Actions workflow, which leaves a request on a `control` branch, and the
+collector picks it up with a `git fetch` a minute later (see
+[The dashboard](#the-dashboard)).
 
 ## Quick start
 
@@ -332,6 +337,18 @@ GitHub Pages serves exactly what is in the branch.
   chart and a spike in the loss chart are visibly the same host.
 * The latency axis clips at the 99.5th percentile and says so, rather than
   letting three outliers flatten the everyday band into a straight line.
+* **Run a test now.** Pick a test (throughput, the latency/DNS/web sweep, or
+  both) and optionally an engine, and the collector being viewed runs it within
+  a minute and publishes the result; the page follows it and redraws when it
+  lands, typically 3–4 minutes end to end. Requests go through the repository's
+  [`run-test`](.github/workflows/run-test.yml) workflow, so only people who may
+  run its workflows can start one. Out of the box the button opens that
+  workflow on GitHub; save a fine-grained token limited to this repository with
+  just **Actions: Read and write** (the panel's *One-click setup* walks through
+  it) and the button starts it directly. The token stays in your browser and is
+  sent only to `api.github.com`. On-demand runs ignore `quiet_hours` but still
+  respect `max_daily_gb`, and each one adds a Pages deploy, so it is meant for
+  "is it slow right now?", not for polling.
 * An **Ofcom panel**: 30-day average against the advertised speed, the share of
   tests below the guaranteed minimum, the slowest 10%, and availability. Under
   the Broadband Speed Code of Practice this is the evidence that matters if you
@@ -355,6 +372,7 @@ $RUN speed --force                   # test now with the next engine, ignore gua
 $RUN speed --force --engine speedtest-cli   # or ookla / cloudflare
 $RUN servers                         # find a speedtest server worth pinning
 $RUN publish --dry-run               # build the site, do not push
+$RUN control                         # run a dashboard-requested test, if one is waiting
 $RUN prune                           # apply retention
 ```
 

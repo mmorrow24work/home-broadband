@@ -410,6 +410,12 @@ def write_collectors_index(data_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _on_demand(cfg: Config) -> list[dict[str, Any]]:
+    from .control import published_status  # control imports this module
+
+    return published_status(cfg)
+
+
 def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
     tz = _tzinfo(cfg.get("site.timezone", "UTC"))
     now = int(time.time())
@@ -556,6 +562,8 @@ def build_export(cfg: Config, out_dir: Path) -> dict[str, Any]:
         "days": days,
         "months": months,
         "first_sample": first_ts,
+        "control": control_info(cfg),
+        "on_demand": _on_demand(cfg),
     }
     total_bytes += _write_json(data_dir / "manifest.json", manifest)
     written.append("manifest.json")
@@ -584,6 +592,40 @@ def git_ssh_command(key: str, known_hosts: str | None = None) -> str:
         f'ssh -i "{key_s}" -o IdentitiesOnly=yes '
         f'-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="{known}"'
     )
+
+
+def git_env(cfg: Config) -> dict[str, str] | None:
+    """Environment for git calls that reach the remote.
+
+    The systemd units set GIT_SSH_COMMAND themselves; publish.ssh_key exists for
+    schedulers that cannot (Windows Task Scheduler) and overrides it if set.
+    """
+    if cfg.get("publish.ssh_key"):
+        return {**os.environ, "GIT_SSH_COMMAND": git_ssh_command(cfg.get("publish.ssh_key"))}
+    return None
+
+
+def github_repo(remote: str) -> str | None:
+    """Return "owner/repo" for a GitHub SSH or HTTPS remote, None for anything else."""
+    match = re.match(
+        r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$",
+        (remote or "").strip(),
+    )
+    return match.group(1) if match else None
+
+
+def control_info(cfg: Config) -> dict[str, Any] | None:
+    """What the dashboard needs to offer on-demand tests for this collector."""
+    repo = github_repo(cfg.get("publish.remote") or "")
+    if not cfg.get("control.enabled") or not repo:
+        return None
+    return {
+        "repo": repo,
+        "workflow": cfg.get("control.workflow", "run-test.yml"),
+        "ref": cfg.get("control.ref", "main"),
+        "engines": list(cfg.get("speed.engines", [])),
+    }
 
 
 def _git(
@@ -696,11 +738,7 @@ def push(cfg: Config, tree: Path) -> None:
     drop = {str(x) for x in (cfg.get("publish.drop_collectors") or [])}
     keep_cname = not (cfg.get("site.domain") or "").strip()
 
-    # The systemd unit sets GIT_SSH_COMMAND itself; publish.ssh_key exists for
-    # schedulers that cannot (Windows Task Scheduler) and overrides it if set.
-    env = None
-    if cfg.get("publish.ssh_key"):
-        env = {**os.environ, "GIT_SSH_COMMAND": git_ssh_command(cfg.get("publish.ssh_key"))}
+    env = git_env(cfg)
 
     repo.mkdir(parents=True, exist_ok=True)
     if not (repo / ".git").exists():

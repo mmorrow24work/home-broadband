@@ -271,6 +271,8 @@ Register-Collector 'speed'   (New-ScheduledTaskTrigger -Once -At $today.AddMinut
 # :00/:20/:40, interleaved with the Linux timer's :10/:30/:50 (see systemd/broadband-publish.timer).
 Register-Collector 'publish' (New-ScheduledTaskTrigger -Once -At $today -RepetitionInterval (New-TimeSpan -Minutes 20) -RandomDelay (New-TimeSpan -Minutes 1)) (New-TimeSpan -Minutes 15)
 Register-Collector 'prune'   (New-ScheduledTaskTrigger -Daily -At $today.AddHours(4).AddMinutes(17)) (New-TimeSpan -Minutes 30)
+# Tests requested from the dashboard: one git fetch a minute, half a minute off latency.
+Register-Collector 'control' (New-ScheduledTaskTrigger -Once -At $today.AddSeconds(30) -RepetitionInterval (New-TimeSpan -Minutes 1)) (New-TimeSpan -Minutes 20)
 
 Say 'Done.'
 $pub = Get-Content "$Key.pub"

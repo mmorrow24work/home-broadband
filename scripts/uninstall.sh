@@ -16,7 +16,8 @@ APP_DIR_INSTALLED=/opt/broadband-monitor
 [[ -f "$CONF_DIR/install.env" ]] && . "$CONF_DIR/install.env"
 
 systemctl disable --now broadband-latency.timer broadband-speed.timer \
-                         broadband-publish.timer broadband-prune.timer 2>/dev/null || true
+                         broadband-publish.timer broadband-prune.timer \
+                         broadband-control.timer 2>/dev/null || true
 rm -f /etc/systemd/system/broadband-*.service /etc/systemd/system/broadband-*.timer
 rm -f /etc/sysctl.d/60-broadband-monitor.conf
 systemctl daemon-reload

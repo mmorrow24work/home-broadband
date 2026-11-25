@@ -454,6 +454,26 @@ republish to bring them back.
 
 ---
 
+### "Run a test now" never finishes
+
+The page gives up after 20 minutes. Work along the path the request takes:
+
+1. **The workflow** — the repository's *Actions → Run a test* run for that
+   minute should be green, and its summary names the request id. A red run
+   usually means a bad collector id; a 403 on the page means the token lacks
+   *Actions: Read and write*.
+2. **The collector** — `journalctl -u broadband-control -n 20 --no-pager`
+   (Windows: `C:\ProgramData\broadband-monitor\logs\control.log`) should show
+   `running requested speed test web-…`. Nothing at all means the timer is not
+   running: `systemctl list-timers broadband-control.timer`, or re-run the
+   installer, which adds it. `could not check for requested tests` is the same
+   deploy-key problem as a failing publish.
+3. **The publish** — the result reaches the site with the publish that follows
+   the test, so anything that breaks publishing breaks this too.
+
+A request older than `control.max_age_minutes` (15) when the collector first
+sees it is listed as *expired* rather than run.
+
 ## Known limits
 
 Not faults — things that will not change without different hardware or a

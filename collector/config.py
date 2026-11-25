@@ -97,6 +97,14 @@ DEFAULTS: dict[str, Any] = {
         # Full path to git if the scheduler cannot find it on PATH. "" = search.
         "git_binary": "",
     },
+    # On-demand tests requested from the dashboard; see collector/control.py.
+    "control": {
+        "enabled": True,
+        "branch": "control",
+        "workflow": "run-test.yml",
+        "ref": "main",
+        "max_age_minutes": 15,
+    },
 }
 
 # Hostnames, IPv4 and IPv6 literals (with optional %zone) and nothing else.

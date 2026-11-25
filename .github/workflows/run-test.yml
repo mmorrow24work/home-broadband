@@ -1,0 +1,93 @@
+# Ask a collector to run a test now.
+#
+# Started from the dashboard's "Run a test now" panel (or from the Actions tab).
+# It does nothing but write a small request file to the `control` branch; each
+# collector fetches that branch every minute over its deploy key, runs what is
+# asked of it and publishes the result. Collectors never accept a connection, so
+# this is the only way in, and only people who may run this repository's
+# workflows can use it. See collector/control.py.
+name: Run a test
+
+on:
+  workflow_dispatch:
+    inputs:
+      collector:
+        description: "Collector id as shown in the site's data/collectors.json (e.g. tegra-ubuntu), or 'all'"
+        required: true
+        default: all
+        type: string
+      test:
+        description: What to run
+        required: true
+        default: speed
+        type: choice
+        options: [speed, latency, both]
+      engine:
+        description: Throughput engine (auto = next in the collector's rotation)
+        required: true
+        default: auto
+        type: choice
+        options: [auto, ookla, speedtest-cli, cloudflare]
+      request_id:
+        description: Leave blank; the dashboard fills this in to follow the result
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+# One writer at a time, so the force-push below can never drop a request.
+concurrency:
+  group: control-branch
+  cancel-in-progress: false
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write the request to the control branch
+        env:
+          # Inputs go through the environment, never straight into the script.
+          COLLECTOR: ${{ inputs.collector }}
+          TEST: ${{ inputs.test }}
+          ENGINE: ${{ inputs.engine }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$COLLECTOR" =~ ^[a-z0-9-]{1,40}$ ]] || { echo "::error::bad collector id: $COLLECTOR"; exit 1; }
+          [[ "$TEST" =~ ^(speed|latency|both)$ ]] || { echo "::error::bad test: $TEST"; exit 1; }
+          [[ "$ENGINE" =~ ^(auto|ookla|speedtest-cli|cloudflare)$ ]] || { echo "::error::bad engine: $ENGINE"; exit 1; }
+          id="${REQUEST_ID:-run-${GITHUB_RUN_ID}}"
+          [[ "$id" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || { echo "::error::bad request id"; exit 1; }
+          file="$COLLECTOR"
+          [[ "$COLLECTOR" == "all" ]] && file="_all"
+
+          git init -q control && cd control
+          git remote add origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Keep the other collectors' pending requests; start fresh the first time.
+          if git fetch -q --depth 1 origin control 2>/dev/null; then
+            git checkout -q FETCH_HEAD -- .
+          fi
+          mkdir -p requests
+          jq -n --arg id "$id" --arg test "$TEST" --arg engine "$ENGINE" --arg by "$ACTOR" \
+                --argjson at "$(date +%s)" \
+                '{id: $id, test: $test, engine: $engine, by: $by, requested_at: $at}' \
+                > "requests/${file}.json"
+          cat "requests/${file}.json"
+
+          # One parentless commit each time: the branch carries no history, only
+          # the requests currently outstanding.
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "request: ${TEST} on ${COLLECTOR} (${id})"
+          git push -q -f origin HEAD:refs/heads/control
+          {
+            echo "### Requested a **${TEST}** test on \`${COLLECTOR}\`"
+            echo "Request \`${id}\`. Collectors check every minute; the result is on the dashboard"
+            echo "a couple of minutes after the test finishes."
+          } >> "$GITHUB_STEP_SUMMARY"

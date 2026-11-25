@@ -42,6 +42,53 @@
     </p>
   </section>
 
+  <section class="panel" id="run-panel" hidden>
+    <div class="chart-head">
+      <h2>Run a test now</h2>
+      <p class="muted">Asks <strong class="run-who">this collector</strong> to test straight away
+        instead of waiting for its schedule. It checks for requests every minute; the result shows
+        here a few minutes later.</p>
+    </div>
+    <form id="run-form" class="run-form">
+      <label>Test
+        <select id="run-test">
+          <option value="speed">Throughput (speed test)</option>
+          <option value="latency">Latency, DNS and web sweep</option>
+          <option value="both">Both</option>
+        </select>
+      </label>
+      <label id="run-engine-wrap">Engine
+        <select id="run-engine"><option value="auto">Next in rotation</option></select>
+      </label>
+      <button type="submit" id="run-go" class="primary-btn">Run now</button>
+    </form>
+    <p id="run-status" class="run-status muted" role="status" aria-live="polite"></p>
+    <details class="run-setup" id="run-setup">
+      <summary>One-click setup</summary>
+      <div class="run-setup-body">
+        <p class="muted">Requests go through this site's GitHub repository, so only people who can
+          run its workflows can start a test. Without a token, <em>Run now</em> opens the workflow
+          on GitHub for you to start there. With one, it starts it directly from this page.</p>
+        <ol class="muted">
+          <li>On GitHub, create a <a id="run-token-link" href="https://github.com/settings/personal-access-tokens/new"
+            target="_blank" rel="noopener">fine-grained personal access token</a>.</li>
+          <li>Limit it to <strong>only</strong> <code class="run-repo">this repository</code>, with the
+            single permission <strong>Actions: Read and write</strong>. That lets it start
+            workflows and nothing else: it cannot read or change code.</li>
+          <li>Paste it below. It is kept in this browser only and is sent to nothing but
+            <code>api.github.com</code>.</li>
+        </ol>
+        <div class="run-token-row">
+          <input id="run-token" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="github_pat_…" aria-label="GitHub token">
+          <button type="button" id="run-token-save" class="ghost-btn">Save</button>
+          <button type="button" id="run-token-forget" class="ghost-btn">Forget</button>
+        </div>
+      </div>
+    </details>
+    <div id="run-history" class="run-history"></div>
+  </section>
+
   <div class="controls" role="group" aria-label="Time range">
     <div class="range-buttons" id="range-buttons">
       <button type="button" data-range="24h" class="active">24 hours</button>

@@ -266,3 +266,18 @@ publish:
 
   git_user_name: "broadband-monitor"
   git_user_email: "broadband-monitor@users.noreply.github.com"
+
+# ---------------------------------------------------------------------------
+# On-demand tests from the dashboard ("Run a test now").
+# The dashboard starts .github/workflows/run-test.yml, which writes a request to
+# the control branch; broadband-control.timer (every minute) fetches it with the
+# publish deploy key, runs the test and publishes. Nothing listens on the
+# network. Requests older than max_age_minutes are dropped rather than run, so a
+# collector that was switched off does not wake up and run a stale one.
+# ---------------------------------------------------------------------------
+control:
+  enabled: true
+  branch: "control"
+  workflow: "run-test.yml"   # the workflow file the dashboard starts
+  ref: "main"                # branch that workflow is on
+  max_age_minutes: 15

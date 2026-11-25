@@ -2,7 +2,8 @@
  * Loads the JSON the collectors (Pi, Jetson, PC) publish and renders it with uPlot.
  * Several collectors can share the site; a switch in the header picks one.
  * No build step, no external requests — everything here is served from the
- * same GitHub Pages branch. */
+ * same GitHub Pages branch. The one exception is opt-in: "Run a test now" calls
+ * api.github.com, and only once someone saves a token for it. */
 (() => {
   "use strict";
 
@@ -907,6 +908,245 @@
     }
   }
 
+  // ------------------------------------------------------ on-demand tests
+  // The page never talks to a collector (they accept no connections). It starts
+  // the repository's run-test workflow, which leaves a request on the `control`
+  // branch; the collector fetches that every minute, runs the test, and lists
+  // the request id under on_demand in its next manifest. See collector/control.py.
+  const TOKEN_KEY = "bb-gh-token";
+  const PENDING_KEY = "bb-run-pending";
+  const RUN_WATCH_MS = 15 * 1000;
+  const RUN_GIVE_UP_S = 20 * 60;
+  const TEST_LABELS = {
+    speed: "Throughput",
+    latency: "Latency sweep",
+    both: "Throughput + latency",
+  };
+  const OUTCOMES = {
+    ok: ["s-good", "done"],
+    failed: ["s-critical", "failed"],
+    running: ["s-warning", "running"],
+    expired: ["s-warning", "expired before the collector saw it"],
+    superseded: ["s-good", "covered by a newer request"],
+  };
+  let runTimer = null;
+
+  const stored = (area, key) => {
+    try {
+      return area.getItem(key);
+    } catch (_) {
+      return null;
+    }
+  };
+  const store = (area, key, value) => {
+    try {
+      if (value === null) area.removeItem(key);
+      else area.setItem(key, value);
+    } catch (_) {
+      /* storage unavailable — works for this page view only */
+    }
+  };
+  const setRunStatus = (text, cls) => {
+    const node = $("#run-status");
+    node.textContent = text;
+    node.className = `run-status ${cls || "muted"}`;
+  };
+  const collectorLabel = (id) => {
+    const c = state.collectors.find((x) => x.id === id);
+    return (c && c.label) || id;
+  };
+
+  function renderRunPanel() {
+    const ctl = state.manifest.control;
+    const panel = $("#run-panel");
+    panel.hidden = !ctl;
+    if (!ctl) return;
+
+    const host = state.manifest.host || {};
+    panel.querySelector(".run-who").textContent = host.label || state.manifest.id;
+    panel.querySelectorAll(".run-repo").forEach((node) => {
+      node.textContent = ctl.repo;
+    });
+
+    const select = $("#run-engine");
+    const keep = select.value;
+    select.innerHTML = "";
+    const option = (value, text) => {
+      const node = el("option", null, text);
+      node.value = value;
+      select.appendChild(node);
+    };
+    option("auto", "Next in rotation");
+    for (const engine of ctl.engines || []) option(engine, engineLabel(engine));
+    select.value = [...select.options].some((o) => o.value === keep) ? keep : "auto";
+    $("#run-engine-wrap").hidden = $("#run-test").value === "latency";
+
+    refreshTokenUi();
+    renderRunHistory();
+    const pending = JSON.parse(stored(sessionStorage, PENDING_KEY) || "null");
+    if (pending && !runTimer) watchRun(pending);
+  }
+
+  function refreshTokenUi() {
+    const has = Boolean(stored(localStorage, TOKEN_KEY));
+    $("#run-token").value = "";
+    $("#run-token").placeholder = has ? "Token saved — paste a new one to replace it" : "github_pat_…";
+    $("#run-token-forget").hidden = !has;
+    $("#run-go").textContent = has ? "Run now" : "Run on GitHub…";
+  }
+
+  function renderRunHistory() {
+    const box = $("#run-history");
+    box.innerHTML = "";
+    const list = state.manifest.on_demand || [];
+    if (!list.length) return;
+    box.appendChild(el("h3", null, "Recent requests"));
+    const ul = el("ul");
+    for (const r of list) {
+      const [cls, word] = OUTCOMES[r.outcome] || ["s-warning", r.outcome];
+      const li = el("li");
+      const status = el("span", `tile-status ${cls}`);
+      status.append(el("span", "dot"), el("span", null, word));
+      const what = `${TEST_LABELS[r.test] || r.test}${r.engine ? ` · ${engineLabel(r.engine)}` : ""}`;
+      const when = `requested ${relative(r.requested_at)}${r.by ? ` by ${r.by}` : ""}`;
+      li.append(el("strong", null, what), status, el("span", "muted", when));
+      if (r.detail) li.appendChild(el("span", "muted run-detail", r.detail));
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  }
+
+  function explainDispatchError(status, message, repo) {
+    if (status === 401) return "GitHub rejected the token — it may have expired or been mistyped.";
+    if (status === 403)
+      return `The token is not allowed to start workflows on ${repo}. Give it Actions: Read and write.`;
+    if (status === 404)
+      return `GitHub could not find the run-test workflow on ${repo}, or the token cannot see that repository.`;
+    return `GitHub refused the request (HTTP ${status}${message ? `: ${message}` : ""}).`;
+  }
+
+  async function submitRun(event) {
+    event.preventDefault();
+    const ctl = state.manifest.control;
+    if (!ctl) return;
+    const collector = state.manifest.id;
+    const test = $("#run-test").value;
+    const engine = test === "latency" ? "auto" : $("#run-engine").value;
+    const token = stored(localStorage, TOKEN_KEY);
+
+    if (!token) {
+      window.open(`https://github.com/${ctl.repo}/actions/workflows/${ctl.workflow}`, "_blank", "noopener");
+      setRunStatus(
+        `On GitHub, choose “Run workflow” and enter collector “${collector}”, test “${test}”` +
+          (engine !== "auto" ? `, engine “${engine}”` : "") +
+          ". Or set up one-click runs below to start it from here."
+      );
+      return;
+    }
+
+    const id = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const go = $("#run-go");
+    go.disabled = true;
+    setRunStatus("Sending the request to GitHub…");
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${ctl.repo}/actions/workflows/${encodeURIComponent(ctl.workflow)}/dispatches`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+          body: JSON.stringify({ ref: ctl.ref, inputs: { collector, test, engine, request_id: id } }),
+        }
+      );
+      if (res.status !== 204) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(explainDispatchError(res.status, body.message, ctl.repo));
+      }
+    } catch (error) {
+      go.disabled = false;
+      setRunStatus(error.message || "Could not reach GitHub.", "s-critical");
+      return;
+    }
+    const pending = { id, collector, test, at: Math.floor(Date.now() / 1000) };
+    store(sessionStorage, PENDING_KEY, JSON.stringify(pending));
+    watchRun(pending);
+  }
+
+  /** Poll the collector's manifest until it reports the request handled. */
+  function watchRun(pending) {
+    clearInterval(runTimer);
+    $("#run-go").disabled = true;
+    const who = collectorLabel(pending.collector);
+    const finish = (text, cls) => {
+      clearInterval(runTimer);
+      runTimer = null;
+      store(sessionStorage, PENDING_KEY, null);
+      $("#run-go").disabled = false;
+      setRunStatus(text, cls);
+    };
+
+    const tick = async () => {
+      const age = Math.floor(Date.now() / 1000) - pending.at;
+      let manifest = null;
+      try {
+        manifest = await fetchJSON(`${ROOT}/${pending.collector}/manifest.json`);
+      } catch (_) {
+        /* mid-deploy — try again next tick */
+      }
+      const hit = manifest && (manifest.on_demand || []).find((r) => r.id === pending.id);
+      if (hit && hit.outcome !== "running") {
+        const [cls, word] = OUTCOMES[hit.outcome] || ["s-warning", hit.outcome];
+        finish(`${TEST_LABELS[hit.test] || hit.test} on ${who}: ${word}${hit.detail ? ` — ${hit.detail}` : ""}.`, cls);
+        if (pending.collector === state.collectorId) await loadCollector();
+        return;
+      }
+      if (age > RUN_GIVE_UP_S) {
+        finish(
+          `No result from ${who} after ${fmtDuration(age)}. Check that its control timer is ` +
+            "running and that it can still publish.",
+          "s-critical"
+        );
+        return;
+      }
+      const phase =
+        age < 45
+          ? "GitHub is queuing the request"
+          : age < 150
+          ? "the collector picks requests up within a minute, then runs the test"
+          : "running the test and publishing; GitHub Pages takes a minute or two to update";
+      setRunStatus(`Requested ${fmtDuration(age)} ago — ${phase}…`, "s-warning");
+    };
+    tick();
+    runTimer = setInterval(tick, RUN_WATCH_MS);
+  }
+
+  function initRunPanel() {
+    $("#run-form").addEventListener("submit", submitRun);
+    $("#run-test").addEventListener("change", () => {
+      $("#run-engine-wrap").hidden = $("#run-test").value === "latency";
+    });
+    $("#run-token-save").addEventListener("click", () => {
+      const value = $("#run-token").value.trim();
+      if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(value)) {
+        setRunStatus("That does not look like a GitHub token (github_pat_… or ghp_…).", "s-critical");
+        return;
+      }
+      store(localStorage, TOKEN_KEY, value);
+      refreshTokenUi();
+      $("#run-setup").open = false;
+      setRunStatus("Token saved in this browser. Run now starts the test directly.", "s-good");
+    });
+    $("#run-token-forget").addEventListener("click", () => {
+      store(localStorage, TOKEN_KEY, null);
+      refreshTokenUi();
+      setRunStatus("Token removed from this browser.");
+    });
+  }
+
   function renderAll() {
     for (const { chart } of state.charts) chart.destroy();
     state.charts = [];
@@ -1086,6 +1326,7 @@
     renderTiles();
     renderSLA();
     renderTargets();
+    renderRunPanel();
     await setRange(state.range);
     return true;
   }
@@ -1093,6 +1334,7 @@
   // ------------------------------------------------------------------ boot
   async function boot() {
     initTheme();
+    initRunPanel();
 
     state.collectors = await loadCollectors();
     if (state.collectors.length) state.collectorId = pickCollector(state.collectors);

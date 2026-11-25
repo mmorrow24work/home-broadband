@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for dashboard-requested broadband tests every minute
+
+[Timer]
+OnBootSec=90s
+# Half a minute off the latency sweep. One cheap `git fetch` when nothing is
+# asked for; systemd never starts a second run while a requested test is going.
+OnCalendar=*:*:30
+AccuracySec=5s
+Persistent=false
+Unit=broadband-control.service
+
+[Install]
+WantedBy=timers.target
