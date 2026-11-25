@@ -367,7 +367,9 @@
         width: entry.width ?? 2,
         dash: entry.dash,
         _ref: entry.reference || false,
-        spanGaps: false,
+        // Latency gaps are outages and must show; a failed speed test is not
+        // a slow line, so throughput charts join across it.
+        spanGaps: spec.spanGaps ?? false,
         show: state.hidden[`${spec.key}:${entry.label}`] !== true,
         points: {
           show: entry.points ?? spec.xs.length < 400,
@@ -699,6 +701,7 @@
       unit: " Mbps",
       digits: 1,
       range: (_u, _min, max) => [0, max * 1.1],
+      spanGaps: true,
     });
   }
 
@@ -742,6 +745,7 @@
       unit: " Mbps",
       digits: 1,
       range: (_u, _min, max) => [0, max * 1.1],
+      spanGaps: true,
     });
   }
 

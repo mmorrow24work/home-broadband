@@ -187,9 +187,11 @@ lan:
 # Throughput testing — expensive. Read the data-usage note in the README.
 # ---------------------------------------------------------------------------
 speed:
-  # Throughput tests move real data. On a 500 Mbps line an Ookla run costs about
-  # 0.85 GB and a Cloudflare run about 0.35 GB, so hourly alternating tests are
-  # roughly 14 GB/day. Halve this to 30 for a denser chart and double the bill —
+  # Throughput tests move real data, and the faster the line the more. On a
+  # 500 Mbps line an Ookla run costs about 0.85 GB and a Cloudflare run about
+  # 0.35 GB, so hourly alternating tests are roughly 14 GB/day. On a gigabit
+  # line, measured: Ookla ~1.8 GB and Cloudflare ~2.6 GB a run, so hourly tests
+  # are 45-50 GB/day. Halve this to 30 for a denser chart and double the bill —
   # keep systemd/broadband-speed.timer in step. See README § Data usage.
   interval_minutes: 60
 
@@ -210,8 +212,10 @@ speed:
   # failed test, not a crash, but it clutters the chart.
   engines: [ookla, speedtest-cli, cloudflare]
 
-  # Hard guard: skip a run once the day's cumulative test traffic exceeds this.
-  # Set to 0 to disable. Sized for the interval above with headroom.
+  # Hard guard: skip a run once the day's cumulative test traffic exceeds this
+  # (resets at local midnight; applies to "Run a test now" too). Set to 0 to
+  # disable. 20 suits hourly tests up to ~500 Mbps; use ~60 on a gigabit line,
+  # or the tests stop for the rest of the day by mid-afternoon.
   max_daily_gb: 20
 
   # Skip throughput tests during these local-time hours (inclusive start,
