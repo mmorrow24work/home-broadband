@@ -73,7 +73,16 @@ def setup_logging(verbose: bool = False, log_file: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 # latency sweep
 # ---------------------------------------------------------------------------
+def _away(cfg: Config) -> str | None:
+    """Reason to skip measuring: this machine is on someone else's network."""
+    return link.away_from_home(list(cfg.get("network.home_gateways") or []))
+
+
 def cmd_latency(cfg: Config, args: argparse.Namespace) -> int:
+    away = _away(cfg)
+    if away and not args.dry_run:
+        log.info("not on the home network (%s) — skipping the sweep", away)
+        return 0
     settings = cfg.get("latency", {})
     workers = max(1, int(settings.get("parallel", 8)))
 
@@ -184,6 +193,12 @@ def run_speed(
     engines = cfg.get("speed.engines", ["ookla"])
     now = dt.datetime.now()
 
+    away = _away(cfg)
+    if away and not dry_run:
+        # Not even --force: a 4G hotspot's numbers would sit in the line's history.
+        log.info("not on the home network (%s) — skipping throughput test", away)
+        return 0, "skipped: not on the home network"
+
     if _in_quiet_hours(cfg, now) and not (force or on_demand):
         log.info("inside speed.quiet_hours — skipping throughput test")
         return 0, "skipped: quiet hours"
@@ -293,6 +308,16 @@ def cmd_control(cfg: Config, args: argparse.Namespace) -> int:
     control.save_state(cfg, state)
 
     results, code = [], 0
+    away = None if args.dry_run else _away(cfg)
+    if away:
+        log.info("not on the home network (%s) — not running request %s", away, chosen["id"])
+        entry.update(outcome="skipped", finished_at=int(time.time()),
+                     detail="skipped: not on the home network")
+        control.save_state(cfg, state)
+        if args.no_publish:
+            return 0
+        return cmd_publish(cfg, argparse.Namespace(dry_run=False, export_only=False))
+
     if chosen["test"] in ("latency", "both"):
         rc = cmd_latency(cfg, argparse.Namespace(dry_run=args.dry_run))
         results.append("latency sweep stored" if rc == 0 else "latency sweep failed")

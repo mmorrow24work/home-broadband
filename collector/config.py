@@ -97,6 +97,10 @@ DEFAULTS: dict[str, Any] = {
         # Full path to git if the scheduler cannot find it on PATH. "" = search.
         "git_binary": "",
     },
+    # Gateways (IP and/or MAC) of the network this collector should measure.
+    # Empty = measure wherever it is. Set on a laptop so a 4G hotspot or a hotel
+    # does not end up in the line's history.
+    "network": {"home_gateways": []},
     # On-demand tests requested from the dashboard; see collector/control.py.
     "control": {
         "enabled": True,
@@ -265,6 +269,13 @@ def validate(cfg: Config) -> None:
         )
     if len(engines) != len(set(engines)):
         raise ConfigError("speed.engines: each engine may only be listed once")
+
+    home = cfg.get("network.home_gateways")
+    if not isinstance(home, list) or not all(isinstance(h, str) and h.strip() for h in home):
+        raise ConfigError(
+            "network.home_gateways must be a list of gateway addresses or MACs, "
+            'e.g. ["192.168.1.5"] or ["aa:bb:cc:dd:ee:ff"]'
+        )
 
     if cfg.get("publish.enabled") and not cfg.get("publish.remote"):
         raise ConfigError("publish.enabled is true but publish.remote is empty")

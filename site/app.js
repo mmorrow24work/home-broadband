@@ -928,6 +928,7 @@
     running: ["s-warning", "running"],
     expired: ["s-warning", "expired before the collector saw it"],
     superseded: ["s-good", "covered by a newer request"],
+    skipped: ["s-warning", "skipped"],
   };
   let runTimer = null;
 

@@ -39,6 +39,19 @@ database:
   retention_days: 1095
 
 # ---------------------------------------------------------------------------
+# Only measure on the home network. A laptop collector that also travels (or
+# tethers to a phone) would otherwise put 4G or hotel figures in the line's
+# history. List the home router's address and/or MAC; when the machine's gateway
+# matches none of them, latency sweeps and throughput tests are skipped (an
+# on-demand request is answered "skipped"). With no gateway at all it measures
+# as usual, so local network drops are still recorded. A MAC is the stronger
+# test — 192.168.1.1 is everyone's router. Find it with `ip neigh` (Linux) or
+# `Get-NetNeighbor -IPAddress 192.168.1.5` (Windows). Empty = always measure.
+# ---------------------------------------------------------------------------
+network:
+  home_gateways: []          # e.g. ["192.168.1.5", "aa:bb:cc:dd:ee:ff"]
+
+# ---------------------------------------------------------------------------
 # Latency / reachability probing — cheap, runs continuously.
 # ---------------------------------------------------------------------------
 latency:

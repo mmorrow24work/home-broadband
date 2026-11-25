@@ -17,6 +17,7 @@ import functools
 import json
 import logging
 import platform
+import re
 import socket
 import subprocess
 from pathlib import Path
@@ -233,6 +234,65 @@ def default_gateway() -> str | None:
         hop = proc.stdout.strip()
         return hop if hop and hop not in ("0.0.0.0", "::") else None
     return parse_default_gateway(proc.stdout)
+
+
+_MAC_RE = re.compile(r"^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$", re.IGNORECASE)
+
+
+def normalise_mac(value: str | None) -> str | None:
+    """'AA-BB-CC-DD-EE-FF' / 'aa:bb:…' -> 'aa:bb:cc:dd:ee:ff'; None if not a MAC."""
+    value = (value or "").strip()
+    return value.lower().replace("-", ":") if _MAC_RE.match(value) else None
+
+
+def gateway_mac(gateway: str) -> str | None:
+    """The gateway's hardware address from the neighbour (ARP/NDP) table."""
+    if IS_WINDOWS:
+        safe = gateway.replace("'", "''")
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+               f"(Get-NetNeighbor -IPAddress '{safe}' -ErrorAction SilentlyContinue | "
+               "Select-Object -First 1).LinkLayerAddress"]
+    else:
+        cmd = ["ip", "neigh", "show", gateway]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for word in proc.stdout.split():
+        mac = normalise_mac(word)
+        if mac and mac != "00:00:00:00:00:00":
+            return mac
+    return None
+
+
+def matches_home(gateway: str | None, mac: str | None, home: list[str]) -> bool:
+    """True when the gateway is one of `home` (IP addresses and/or MACs).
+
+    A MAC entry is the stronger test: 192.168.1.1 is everyone's router, but
+    only yours has its hardware address.
+    """
+    wanted = {str(h).strip().lower() for h in home if str(h).strip()}
+    macs = {normalise_mac(h) for h in wanted} - {None}
+    ips = {h for h in wanted if not normalise_mac(h)}
+    return bool((gateway and gateway.lower() in ips) or (mac and mac in macs))
+
+
+def away_from_home(home: list[str]) -> str | None:
+    """Why this machine is not on the home network right now, or None.
+
+    With no gateway at all (Wi-Fi off, waking from sleep) it is not "away":
+    measuring then is what records a local network drop.
+    """
+    if not home:
+        return None
+    gateway = default_gateway()
+    if not gateway:
+        return None
+    needs_mac = any(normalise_mac(str(h)) for h in home)
+    mac = gateway_mac(gateway) if needs_mac else None
+    if matches_home(gateway, mac, home):
+        return None
+    return f"gateway {gateway}{f' ({mac})' if mac else ''} is not a home gateway"
 
 
 # DMI strings that boards ship unfilled; never worth showing.

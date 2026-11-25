@@ -259,3 +259,17 @@ def test_failed_test_is_reported_not_retried(tmp_path, remote, monkeypatch):
     [entry] = control.published_status(cfg)
     assert entry["outcome"] == "failed" and "no binary" in entry["detail"]
     assert main.cmd_control(cfg, argparse.Namespace(dry_run=False, no_publish=True)) == 0
+
+
+def test_request_while_away_is_answered_skipped(tmp_path, remote, monkeypatch):
+    from collector import link
+
+    cfg = collector_cfg(tmp_path, remote)
+    cfg.data["network"]["home_gateways"] = ["192.168.1.5"]
+    monkeypatch.setattr(link, "default_gateway", lambda: "192.168.109.80")
+    monkeypatch.setattr(main, "run_speed", lambda *a, **k: pytest.fail("ran while away"))
+    put_requests(tmp_path, remote, {"pi": request("web-away")})
+
+    assert main.cmd_control(cfg, argparse.Namespace(dry_run=False, no_publish=True)) == 0
+    [entry] = control.published_status(cfg)
+    assert entry["outcome"] == "skipped" and "home network" in entry["detail"]
