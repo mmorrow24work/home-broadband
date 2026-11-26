@@ -106,6 +106,8 @@ run UDP floods from a collector.**
 | **Only measure on the home network** — `network.home_gateways` lists the home router's IP and MAC; when the laptop is elsewhere (e.g. tethered to a phone) its sweeps and tests are skipped. | 4G and other networks' figures were landing in the line's history. A MAC is the stronger test: 192.168.1.x addresses are on every network. |
 | **Add a Wi-Fi 6 access point: TP-Link Archer AX55 (AX3000)**, cabled to the hub, in **Access Point mode**, near the desk. | The hub caps Wi-Fi at ~400 Mbps even at 1 m and offers no channel control. AP mode leaves the hub routing (no double NAT) and the home gateway unchanged, so `home_gateways` stays valid. |
 | **5 GHz on channel 36**, trying **160 MHz** first and falling back to **80 MHz** if unstable. | 36–48 were empty. 160 MHz from 36 overlaps 52–64, where the neighbour is; 80 MHz on 36 avoids them. The laptop (Intel AX211) supports 160 MHz. |
+| **AX55 placed beside the hub, not near the desk** (26 Nov 2026). | It can't be moved. So the signal at the desk is unchanged, and the gain has to come from channel width instead. |
+| **Keep 160 MHz on.** | At 80 MHz the AX55 was no better than the hub; at 160 MHz download is up 60–95% with no retransmissions. The overlap with the neighbour on 52 has not shown up as instability so far. |
 
 ## Baseline to beat
 
@@ -117,12 +119,39 @@ The first scheduled `lan` run (25 Nov 2026, 14:51, from the desk) read
 **225 down / 447 up** — 5 GHz channel 52, −61 dBm, link rate 390 in / 867 out.
 That is the "before" point on the dashboard's Wi-Fi throughput chart.
 
-## Status (25 Nov 2026)
+## Result: Archer AX55 (26 Nov 2026)
+
+Set up in Access Point mode beside the hub (same distance from the desk as
+before), wired to the hub at 1 Gbps, 5 GHz channel 36, WPA3. Measured from the
+usual desk, Wi-Fi only (iperf3 to the Jetson, 5 s per direction):
+
+| | Download | Upload | Signal | Link rate in / out |
+|---|---|---|---|---|
+| Vodafone hub, Wi-Fi 5, ch 52, 80 MHz (20 hourly runs) | ~230 | ~445 | −60 to −65 dBm | 520–650 / 867 |
+| AX55, Wi-Fi 6, ch 36, **80 MHz** | 239 | 397 | −62 dBm | 360–432 / 865 |
+| AX55, Wi-Fi 6, ch 36, **160 MHz** | **384–452** | **489–539** | −63 dBm | 649–961 / 1153–1297 |
+
+* **At 80 MHz the new router changed nothing**: the signal at the desk was the
+  same, and so was throughput. A better radio cannot make up for distance on
+  its own.
+* **160 MHz is what helped**: roughly double the link rate, download up
+  60–95%, upload up ~15%, no retransmissions.
+* Ping to the hub went from ~1 ms to a median of ~4 ms (max 13 over a minute),
+  the cost of the extra hop through the access point. For a few seconds after
+  a saturating test, pings spike to ~120 ms while the AP drains its queue —
+  another reason to keep LAN tests short.
+* Still well short of the ~930 Mbps line. The rest is distance: moving the AP
+  to the desk (a longer cable) would be the next step if that ever becomes
+  possible.
+
+## Status (26 Nov 2026)
 
 * The Jetson runs `iperf3 -s` on port 5201, started at boot from its crontab.
 * The Windows laptop collector runs the `lan` test hourly at about :45 and
   skips it when off the home network.
 * The dashboard charts the results as **Wi-Fi throughput**.
+* The laptop is on the TP-Link Archer AX55 (`192.168.1.5`, AP mode), 5 GHz
+  channel 36 at 160 MHz.
 
 ## Repeating the measurement
 
@@ -153,4 +182,7 @@ details of the latest run.
 
 ## Open items
 
-* Set up the Archer AX55 and measure it against the baseline above.
+* Watch the hourly Wi-Fi throughput chart for a few days at 160 MHz. If it
+  drops out or varies a lot (the upper half of a 160 MHz channel from 36
+  overlaps the neighbour on 52, and 52–64 are DFS channels a radar event can
+  vacate), fall back to 80 MHz.
