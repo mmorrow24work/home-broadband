@@ -1,0 +1,1425 @@
+/* home-broadband dashboard
+ * Loads the JSON the collectors (Pi, Jetson, PC) publish and renders it with uPlot.
+ * Several collectors can share the site; a switch in the header picks one.
+ * No build step, no external requests — everything here is served from the
+ * same GitHub Pages branch. The one exception is opt-in: "Run a test now" calls
+ * api.github.com, and only once someone saves a token for it. */
+(() => {
+  "use strict";
+
+  const ROOT = "data";
+  // Folder of the collector being shown: data/<id> once collectors.json lists
+  // it, plain data/ for a site published before collectors had their own.
+  let DATA = ROOT;
+  const CONNECTION_LABELS = { wired: "Wired", wifi: "Wi-Fi" };
+  const SERIES_SLOTS = 8;
+  // Engine ids are stored verbatim by the collector; these are display names.
+  const ENGINE_LABELS = {
+    ookla: "Ookla",
+    "speedtest-cli": "speedtest-cli",
+    cloudflare: "Cloudflare",
+  };
+  const engineLabel = (id) => ENGINE_LABELS[id] || id || "—";
+  const RANGES = {
+    "24h": { hours: 24, source: "latest" },
+    "48h": { hours: 48, source: "latest" },
+    "7d": { hours: 24 * 7, source: "daily" },
+    "30d": { hours: 24 * 30, source: "daily" },
+    all: { hours: null, source: "monthly" },
+  };
+
+  const state = {
+    collectors: [],
+    collectorId: null,
+    manifest: null,
+    summary: null,
+    range: "24h",
+    dataset: null,
+    charts: [],
+    hidden: {},
+    // name -> colour slot, for targets no longer in config.yaml
+    retired: new Map(),
+    tz: "UTC",
+  };
+
+  const $ = (sel) => document.querySelector(sel);
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  // ---------------------------------------------------------------- utils
+  const cssVar = (name) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  const seriesColour = (index) => cssVar(`--series-${(index % SERIES_SLOTS) + 1}`);
+
+  async function fetchJSON(path) {
+    const res = await fetch(`${path}?v=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    return res.json();
+  }
+
+  const fmtNum = (value, digits = 1) =>
+    value === null || value === undefined || Number.isNaN(value)
+      ? "—"
+      : Number(value).toLocaleString(undefined, {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        });
+
+  function fmtDuration(seconds) {
+    if (seconds === null || seconds === undefined) return "—";
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+    const hours = Math.floor(seconds / 3600);
+    return `${hours}h ${Math.round((seconds % 3600) / 60)}m`;
+  }
+
+  function tsFormatter(opts) {
+    return new Intl.DateTimeFormat("en-GB", { timeZone: state.tz, ...opts });
+  }
+
+  const fmtDateTime = (ts) =>
+    ts
+      ? tsFormatter({
+          day: "2-digit",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(new Date(ts * 1000))
+      : "—";
+
+  const relative = (ts) => {
+    const mins = Math.round((Date.now() / 1000 - ts) / 60);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+  };
+
+  // ------------------------------------------------------- data assembly
+  function daysInRange(hours) {
+    const days = state.manifest.days || [];
+    if (hours === null) return days;
+    const cutoff = new Date(Date.now() - hours * 3600 * 1000);
+    return days.filter((day) => new Date(`${day}T23:59:59Z`) >= cutoff);
+  }
+
+  function mergeSeries(target, incoming) {
+    for (const [name, series] of Object.entries(incoming || {})) {
+      const dest = (target[name] = target[name] || {});
+      for (const [key, values] of Object.entries(series)) {
+        dest[key] = (dest[key] || []).concat(values);
+      }
+    }
+  }
+
+  function mergeColumns(target, incoming) {
+    for (const [key, values] of Object.entries(incoming || {})) {
+      target[key] = (target[key] || []).concat(values);
+    }
+  }
+
+  async function loadDataset(rangeKey) {
+    const range = RANGES[rangeKey];
+    // outages: null means "derive them from the raw samples"; an array means the
+    // publisher already computed them at full resolution (bucketed files cannot
+    // show a 90-second drop, so trusting the file beats re-deriving it here).
+    const dataset = { latency: {}, speed: {}, lan: {}, http: {}, resolution: 60, outages: null };
+
+    if (range.source === "latest") {
+      const latest = await fetchJSON(`${DATA}/latest.json`);
+      dataset.resolution = latest.resolution || 60;
+      const cutoff = Math.floor(Date.now() / 1000) - range.hours * 3600;
+      for (const [name, series] of Object.entries(latest.latency || {})) {
+        const keep = series.t.map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
+        dataset.latency[name] = {
+          t: keep.map((i) => series.t[i]),
+          rtt: keep.map((i) => series.rtt[i]),
+          loss: keep.map((i) => series.loss[i]),
+        };
+      }
+      const speed = latest.speed || {};
+      const keepSpeed = (speed.t || [])
+        .map((t, i) => (t >= cutoff ? i : -1))
+        .filter((i) => i >= 0);
+      for (const key of Object.keys(speed)) {
+        dataset.speed[key] = keepSpeed.map((i) => speed[key][i]);
+      }
+      const lan = latest.lan || {};
+      const keepLan = (lan.t || []).map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
+      for (const key of Object.keys(lan)) {
+        dataset.lan[key] = keepLan.map((i) => lan[key][i]);
+      }
+      for (const [name, series] of Object.entries(latest.http || {})) {
+        const keep = series.t.map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
+        dataset.http[name] = { t: keep.map((i) => series.t[i]), ttfb: keep.map((i) => series.ttfb[i]) };
+      }
+      return dataset;
+    }
+
+    const files =
+      range.source === "daily"
+        ? daysInRange(range.hours).map((day) => `${DATA}/daily/${day}.json`)
+        : (state.manifest.months || []).map((month) => `${DATA}/monthly/${month}.json`);
+
+    const payloads = await Promise.all(
+      files.map((file) => fetchJSON(file).catch(() => null))
+    );
+    const cutoff =
+      range.hours === null ? 0 : Math.floor(Date.now() / 1000) - range.hours * 3600;
+
+    const outages = new Map();
+    for (const payload of payloads) {
+      if (!payload) continue;
+      dataset.resolution = payload.resolution || dataset.resolution;
+      mergeSeries(dataset.latency, payload.latency);
+      mergeColumns(dataset.speed, payload.speed);
+      mergeColumns(dataset.lan, payload.lan);
+      mergeSeries(dataset.http, payload.http);
+      const summary = payload.summary || {};
+      for (const outage of summary.outages || []) {
+        outages.set(outage.start, { kind: "internet", ...outage }); // day and month files overlap
+      }
+      for (const drop of summary.local_drops || []) {
+        outages.set(drop.start, { ...drop, kind: "local" });
+      }
+    }
+    dataset.outages = [...outages.values()].sort((a, b) => a.start - b.start);
+
+    // trim to the requested window (day files include whole days)
+    for (const series of Object.values(dataset.latency)) {
+      const keep = series.t.map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
+      for (const key of Object.keys(series)) series[key] = keep.map((i) => series[key][i]);
+    }
+    if (dataset.speed.t) {
+      const keep = dataset.speed.t.map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
+      for (const key of Object.keys(dataset.speed)) {
+        dataset.speed[key] = keep.map((i) => dataset.speed[key][i]);
+      }
+    }
+    for (const series of Object.values(dataset.http)) {
+      const keep = series.t.map((t, i) => (t >= cutoff ? i : -1)).filter((i) => i >= 0);
+      for (const key of Object.keys(series)) series[key] = keep.map((i) => series[key][i]);
+    }
+    return dataset;
+  }
+
+  /** Snap timestamps onto a common grid so multi-target series share an x axis. */
+  function align(seriesMap, valueKey, resolution) {
+    const names = Object.keys(seriesMap);
+    const grid = new Set();
+    const lookup = new Map();
+
+    for (const name of names) {
+      const series = seriesMap[name];
+      const perName = new Map();
+      (series.t || []).forEach((t, i) => {
+        const snapped = Math.round(t / resolution) * resolution;
+        grid.add(snapped);
+        perName.set(snapped, series[valueKey][i]);
+      });
+      lookup.set(name, perName);
+    }
+
+    const xs = [...grid].sort((a, b) => a - b);
+    const columns = names.map((name) => {
+      const perName = lookup.get(name);
+      return xs.map((x) => {
+        const value = perName.get(x);
+        return value === undefined ? null : value;
+      });
+    });
+    return { names, xs, columns };
+  }
+
+  // ------------------------------------------------------------- charting
+  function tooltipPlugin(formatValue, unit) {
+    const node = $("#tooltip");
+    return {
+      hooks: {
+        setCursor: (u) => {
+          const { idx, left, top } = u.cursor;
+          if (idx === null || idx === undefined || left < 0) {
+            node.hidden = true;
+            return;
+          }
+          const rows = [];
+          for (let i = 1; i < u.series.length; i++) {
+            const series = u.series[i];
+            if (!series.show || series._ref) continue;
+            const value = u.data[i][idx];
+            if (value === null || value === undefined) continue;
+            rows.push(
+              `<div class="tt-row"><span class="swatch" style="background:${series.stroke()}"></span>` +
+                `<span>${series.label}</span><span class="tt-val">${formatValue(value)}${unit}</span></div>`
+            );
+          }
+          if (!rows.length) {
+            node.hidden = true;
+            return;
+          }
+          node.innerHTML =
+            `<div class="tt-time">${fmtDateTime(u.data[0][idx])}</div>` + rows.join("");
+          node.hidden = false;
+          const rect = u.over.getBoundingClientRect();
+          const box = node.getBoundingClientRect();
+          let x = rect.left + left + 14;
+          if (x + box.width > window.innerWidth - 8) x = rect.left + left - box.width - 14;
+          let y = rect.top + top - box.height / 2;
+          y = Math.max(8, Math.min(y, window.innerHeight - box.height - 8));
+          node.style.left = `${x}px`;
+          node.style.top = `${y}px`;
+        },
+      },
+    };
+  }
+
+  function axisDefaults() {
+    return {
+      stroke: cssVar("--ink-muted"),
+      grid: { stroke: cssVar("--grid"), width: 1 },
+      ticks: { stroke: cssVar("--axis"), width: 1, size: 4 },
+      font: `11px ${cssVar("--font") || "system-ui"}`,
+    };
+  }
+
+  /** UK-style time axis: clock time within a day, date at midnight and on wide spans. */
+  function timeAxisValues(u, splits) {
+    const span = (u.scales.x.max || 0) - (u.scales.x.min || 0);
+    const dateFmt = tsFormatter({ day: "2-digit", month: "short" });
+    const clockFmt = tsFormatter({ hour: "2-digit", minute: "2-digit", hour12: false });
+    return splits.map((ts, index) => {
+      const when = new Date(ts * 1000);
+      if (span > 6 * 86400) return dateFmt.format(when);
+      const clock = clockFmt.format(when);
+      return clock === "00:00" || index === 0 ? dateFmt.format(when) : clock;
+    });
+  }
+
+  /** Colour follows the target, not its position in this particular chart. */
+  function targetColour(name) {
+    const index = (state.manifest.targets || []).findIndex((t) => t.name === name);
+    if (index >= 0) return seriesColour(index);
+
+    // A target removed from config.yaml keeps its history in the published
+    // data until it ages out of the window, so it still has a series here.
+    // Give it a slot after the configured targets — returning slot 0 would
+    // paint it the same colour as the first configured target.
+    if (!state.retired.has(name)) {
+      state.retired.set(name, (state.manifest.targets || []).length + state.retired.size);
+    }
+    return seriesColour(state.retired.get(name));
+  }
+
+  /** Order series the way the config lists them, so charts agree with each other. */
+  function orderByManifest(names) {
+    const order = (state.manifest.targets || []).map((t) => t.name);
+    const rank = (name) => {
+      const exact = order.indexOf(name);
+      if (exact >= 0) return exact;
+      const prefix = order.findIndex((t) => name.startsWith(t));
+      return prefix >= 0 ? prefix : order.length;
+    };
+    return names
+      .map((name, index) => ({ name, index }))
+      .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+  }
+
+  function makeChart(containerSel, legendSel, spec) {
+    const container = $(containerSel);
+    container.innerHTML = "";
+    const legendBox = legendSel ? $(legendSel) : null;
+    if (legendBox) legendBox.innerHTML = "";
+
+    if (!spec.xs.length) {
+      container.appendChild(el("p", "muted empty", "No data in this window yet."));
+      return null;
+    }
+
+    // With more configured targets than palette slots, two entities on the SAME
+    // chart can land on the same hue (slot = index % 8). Identity must never be
+    // ambiguous within one chart, so move any duplicate to a free slot. Charts
+    // never carry more than eight series here, so a free slot always exists.
+    const paletteSeen = new Set();
+    const resolved = spec.series.map((entry, index) => {
+      let colour = entry.colour || seriesColour(index);
+      if (!entry.reference && paletteSeen.has(colour)) {
+        for (let slot = 0; slot < SERIES_SLOTS; slot++) {
+          const candidate = seriesColour(slot);
+          if (!paletteSeen.has(candidate)) {
+            colour = candidate;
+            break;
+          }
+        }
+      }
+      if (!entry.reference) paletteSeen.add(colour);
+      return { ...entry, colour };
+    });
+
+    const series = [{}].concat(
+      resolved.map((entry, index) => ({
+        label: entry.label,
+        stroke: entry.colour || seriesColour(index),
+        width: entry.width ?? 2,
+        dash: entry.dash,
+        _ref: entry.reference || false,
+        // Latency gaps are outages and must show; a failed speed test is not
+        // a slow line, so throughput charts join across it.
+        spanGaps: spec.spanGaps ?? false,
+        show: state.hidden[`${spec.key}:${entry.label}`] !== true,
+        points: {
+          show: entry.points ?? spec.xs.length < 400,
+          size: 6,
+          stroke: entry.colour || seriesColour(index),
+          fill: cssVar("--surface-1"),
+          width: 2,
+        },
+        value: (_u, v) => (v == null ? "—" : fmtNum(v, spec.digits ?? 1)),
+      }))
+    );
+
+    const opts = {
+      width: container.clientWidth || 900,
+      height: spec.height || 280,
+      tzDate: (ts) => uPlot.tzDate(new Date(ts * 1000), state.tz),
+      cursor: {
+        y: false,
+        points: { size: 7 },
+        drag: { setScale: false },
+      },
+      legend: { show: false },
+      scales: { x: { time: true }, y: { range: spec.range } },
+      axes: [
+        { ...axisDefaults(), space: 80, values: timeAxisValues },
+        {
+          ...axisDefaults(),
+          label: spec.yLabel,
+          labelSize: 30,
+          labelFont: `500 11px ${cssVar("--font") || "system-ui"}`,
+          size: 52,
+          values: (_u, splits) => splits.map((v) => fmtNum(v, spec.axisDigits ?? 0)),
+        },
+      ],
+      series,
+      plugins: [tooltipPlugin((v) => fmtNum(v, spec.digits ?? 1), spec.unit || "")],
+    };
+
+    const chart = new uPlot(opts, [spec.xs].concat(spec.columns), container);
+
+    if (legendBox) {
+      resolved.forEach((entry, index) => {
+        const button = el("button", "legend-item");
+        button.type = "button";
+        const key = `${spec.key}:${entry.label}`;
+        button.setAttribute("aria-pressed", String(state.hidden[key] !== true));
+        const swatch = el("span", "swatch");
+        swatch.style.background = entry.colour || seriesColour(index);
+        if (entry.dash) swatch.style.opacity = "0.6";
+        button.append(swatch, el("span", null, entry.label));
+        button.addEventListener("click", () => {
+          const nowHidden = !(state.hidden[key] === true);
+          state.hidden[key] = nowHidden;
+          button.setAttribute("aria-pressed", String(!nowHidden));
+          chart.setSeries(index + 1, { show: !nowHidden });
+        });
+        legendBox.appendChild(button);
+      });
+    }
+
+    state.charts.push({ chart, container });
+    return chart;
+  }
+
+  function resizeCharts() {
+    for (const { chart, container } of state.charts) {
+      chart.setSize({ width: container.clientWidth, height: chart.height });
+    }
+  }
+
+  // ------------------------------------------------------------- rendering
+  function tile(label, value, unit, sub, status) {
+    const node = el("div", "tile");
+    node.appendChild(el("div", "tile-label", label));
+    const valueNode = el("div", "tile-value");
+    valueNode.append(document.createTextNode(value));
+    if (unit) valueNode.appendChild(el("span", "unit", unit));
+    node.appendChild(valueNode);
+    if (sub) node.appendChild(el("div", "tile-sub", sub));
+    if (status) {
+      const wrap = el("div", `tile-status s-${status.level}`);
+      wrap.append(el("span", "dot"), el("span", null, status.text));
+      node.appendChild(wrap);
+    }
+    return node;
+  }
+
+  function renderTiles() {
+    const box = $("#tiles");
+    box.innerHTML = "";
+    const current = state.summary.current;
+    const day = state.summary.windows["24h"];
+    const isp = state.manifest.site.isp || {};
+
+    if (current) {
+      const guaranteed = Number(isp.guaranteed_min_down_mbps) || 0;
+      // A result at the collector's own NIC ceiling says nothing about the line.
+      const linkSpeed = Number((state.manifest.host || {}).link_speed_mbps) || 0;
+      const nicBound =
+        linkSpeed > 0 && Math.max(current.down_mbps || 0, current.up_mbps || 0) >= linkSpeed * 0.85;
+      const overWifi = (state.manifest.host || {}).connection === "wifi";
+      const level =
+        guaranteed && current.down_mbps < guaranteed
+          ? "critical"
+          : guaranteed && current.down_mbps < guaranteed * 1.2
+          ? "warning"
+          : "good";
+      box.appendChild(
+        tile(
+          "Download",
+          fmtNum(current.down_mbps, 1),
+          "Mbps",
+          `${engineLabel(current.engine)} · ${relative(current.ts)}`,
+          nicBound
+            ? {
+                level: "warning",
+                text: `capped by this machine's ${linkSpeed} Mbit link`,
+              }
+            : overWifi && guaranteed && level !== "good"
+            ? { level: "warning", text: "measured over Wi-Fi, not the line" }
+            : guaranteed
+            ? {
+                level,
+                text:
+                  level === "critical"
+                    ? `below ${guaranteed} Mbps minimum`
+                    : level === "warning"
+                    ? "close to minimum"
+                    : "above guaranteed minimum",
+              }
+            : null
+        )
+      );
+      box.appendChild(
+        tile("Upload", fmtNum(current.up_mbps, 1), "Mbps", `${engineLabel(current.engine)} · ${relative(current.ts)}`)
+      );
+      box.appendChild(
+        tile(
+          "Idle latency",
+          fmtNum(current.ping_ms, 1),
+          "ms",
+          `jitter ${fmtNum(current.jitter_ms, 1)} ms`
+        )
+      );
+    }
+
+    if (day && day.latency) {
+      box.appendChild(
+        tile(
+          "Availability (24h)",
+          fmtNum(day.availability_pct, 3),
+          "%",
+          `${day.outage_count} outage${day.outage_count === 1 ? "" : "s"}, ${fmtDuration(
+            day.outage_seconds
+          )} total` +
+            (day.local_drop_count
+              ? ` · ${day.local_drop_count} local network drop${
+                  day.local_drop_count === 1 ? "" : "s"
+                } not counted`
+              : ""),
+          {
+            level:
+              day.availability_pct >= 99.99
+                ? "good"
+                : day.availability_pct >= 99.5
+                ? "warning"
+                : "critical",
+            text: day.availability_pct >= 99.99 ? "stable" : "interruptions seen",
+          }
+        )
+      );
+      box.appendChild(
+        tile(
+          "Latency p95 (24h)",
+          fmtNum(day.latency.p95_ms, 1),
+          "ms",
+          `${day.latency.target} · ${day.latency.samples} probes`
+        )
+      );
+    }
+    if (day) {
+      box.appendChild(
+        tile("Test data used (24h)", fmtNum(day.data_used_gb, 2), "GB", `${day.tests} tests run`)
+      );
+    }
+  }
+
+  function renderSLA() {
+    $("#sla-panel").hidden = true; // until we know there is something to show
+    const isp = state.manifest.site.isp || {};
+    const advertised = Number(isp.advertised_down_mbps) || 0;
+    const guaranteed = Number(isp.guaranteed_min_down_mbps) || 0;
+    if (!advertised && !guaranteed) return;
+
+    const window30 = state.summary.windows["30d"];
+    if (!window30 || !window30.tests) return;
+
+    // If the collector's own NIC cannot carry the advertised speed, every
+    // throughput figure here is a floor rather than a measurement of the line.
+    // Reporting "62% of headline speed" without saying so is worse than useless:
+    // it looks like an ISP problem and it is not.
+    const linkSpeed = Number((state.manifest.host || {}).link_speed_mbps) || 0;
+    const usableCeiling = linkSpeed ? linkSpeed * 0.94 : 0;
+    const nicBound = usableCeiling > 0 && advertised > usableCeiling;
+
+    const body = $("#sla-body");
+    body.innerHTML = "";
+
+    const banner = $("#sla-banner");
+    const overWifi = (state.manifest.host || {}).connection === "wifi";
+    if (overWifi) {
+      banner.textContent =
+        "Measured over Wi-Fi. These numbers include the wireless hop between this " +
+        "machine and the router, so they normally sit below what the line delivers. " +
+        "Hold the ISP to the wired collector's figures, not these.";
+      banner.hidden = false;
+    } else if (nicBound) {
+      banner.textContent =
+        `This collector is on a ${linkSpeed} Mbit link, which caps measurements at ` +
+        `about ${Math.round(usableCeiling)} Mbps — below your ${advertised} Mbps package. ` +
+        `Throughput below is a floor, not a measurement of your line. Latency, jitter, ` +
+        `packet loss and outages are unaffected.`;
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+
+    const item = (label, valueHtml, sub, pct, colour) => {
+      const node = el("div", "sla-item");
+      node.appendChild(el("div", "tile-label", label));
+      const strong = el("strong");
+      strong.innerHTML = valueHtml;
+      node.appendChild(strong);
+      if (sub) node.appendChild(el("div", "tile-sub", sub));
+      if (pct !== undefined) {
+        const bar = el("div", "bar");
+        const fill = el("span");
+        fill.style.width = `${Math.max(2, Math.min(100, pct))}%`;
+        if (colour) fill.style.background = colour;
+        bar.appendChild(fill);
+        node.appendChild(bar);
+      }
+      return node;
+    };
+
+    if (advertised) {
+      // When the NIC is the binding constraint, compare against what this
+      // machine can actually carry — comparing to the package is meaningless.
+      const reference = nicBound ? usableCeiling : advertised;
+      const pct = (window30.down.avg / reference) * 100;
+      body.appendChild(
+        item(
+          nicBound ? "30-day average vs link ceiling" : "30-day average vs advertised",
+          `${fmtNum(window30.down.avg, 1)} <span class="unit">of ${
+            nicBound ? `~${Math.round(usableCeiling)} Mbps usable` : `${advertised} Mbps`
+          }</span>`,
+          nicBound
+            ? `${fmtNum(pct, 0)}% of this machine's ${linkSpeed} Mbit ceiling`
+            : `${fmtNum(pct, 0)}% of the headline speed`,
+          pct,
+          pct >= 90 ? cssVar("--good") : pct >= 70 ? cssVar("--warning") : cssVar("--critical")
+        )
+      );
+    }
+    if (guaranteed) {
+      const below = window30.below_guaranteed_pct ?? 0;
+      body.appendChild(
+        item(
+          "Tests below guaranteed minimum",
+          `${fmtNum(below, 1)}<span class="unit">%</span>`,
+          `${guaranteed} Mbps minimum · ${window30.tests} tests in 30 days`,
+          below,
+          below === 0 ? cssVar("--good") : below < 5 ? cssVar("--warning") : cssVar("--critical")
+        )
+      );
+      body.appendChild(
+        item(
+          "Slowest 10% of tests",
+          `${fmtNum(window30.down.p10, 1)} <span class="unit">Mbps</span>`,
+          `worst single result ${fmtNum(window30.down.min, 1)} Mbps`
+        )
+      );
+    }
+    body.appendChild(
+      item(
+        "30-day availability",
+        `${fmtNum(window30.availability_pct, 3)}<span class="unit">%</span>`,
+        `${window30.outage_count} outages, ${fmtDuration(window30.outage_seconds)} total downtime`
+      )
+    );
+
+    const heading = $("#sla-panel").querySelector("h2");
+    heading.textContent = isp.name
+      ? `Against what you pay for — ${isp.name}${isp.package ? ` (${isp.package})` : ""}`
+      : "Against what you pay for";
+    $("#sla-panel").hidden = false;
+  }
+
+  function renderSpeedChart() {
+    const speed = state.dataset.speed;
+    const xs = speed.t || [];
+    const isp = state.manifest.site.isp || {};
+    const guaranteed = Number(isp.guaranteed_min_down_mbps) || 0;
+
+    const series = [
+      { label: "Download", colour: cssVar("--series-1") },
+      { label: "Upload", colour: cssVar("--series-2") },
+    ];
+    const columns = [speed.down || [], speed.up || []];
+
+    if (guaranteed) {
+      series.push({
+        label: `Guaranteed minimum (${guaranteed} Mbps)`,
+        colour: cssVar("--ink-muted"),
+        width: 1.5,
+        dash: [6, 4],
+        points: false,
+        reference: true,
+      });
+      columns.push(xs.map(() => guaranteed));
+    }
+
+    makeChart("#chart-speed", "#legend-speed", {
+      key: "speed",
+      xs,
+      series,
+      columns,
+      yLabel: "Mbps",
+      unit: " Mbps",
+      digits: 1,
+      range: (_u, _min, max) => [0, max * 1.1],
+      spanGaps: true,
+    });
+  }
+
+  function renderLanChart() {
+    const lan = state.dataset.lan || {};
+    const xs = lan.t || [];
+    const panel = $("#lan-panel");
+    panel.hidden = !xs.length;
+    if (!xs.length) return;
+
+    // The radio's state at the last good test: a slow result means little
+    // without knowing what band, channel and signal it ran on.
+    let last = -1;
+    for (let i = xs.length - 1; i >= 0; i--) {
+      if (lan.ok && lan.ok[i]) {
+        last = i;
+        break;
+      }
+    }
+    const pick = (key) => (lan[key] && last >= 0 ? lan[key][last] : null);
+    $("#lan-radio").textContent =
+      last < 0
+        ? "No successful test in this range."
+        : `Last test ${relative(xs[last])}: ${fmtNum(pick("down"), 0)} down / ${fmtNum(pick("up"), 0)} up Mbps` +
+          (pick("channel")
+            ? ` · ${pick("band")} channel ${pick("channel")}, signal ${fmtNum(pick("rssi"), 0)} dBm, ` +
+              `link rate ${fmtNum(pick("rx"), 0)} in / ${fmtNum(pick("tx"), 0)} out Mbps`
+            : "");
+    const server = (state.manifest.lan || {}).server;
+    if (server) $("#lan-server").textContent = server;
+
+    makeChart("#chart-lan", "#legend-lan", {
+      key: "lan",
+      xs,
+      series: [
+        { label: "Download (to this machine)", colour: cssVar("--series-1") },
+        { label: "Upload", colour: cssVar("--series-2") },
+      ],
+      columns: [lan.down || [], lan.up || []],
+      yLabel: "Mbps",
+      unit: " Mbps",
+      digits: 1,
+      range: (_u, _min, max) => [0, max * 1.1],
+      spanGaps: true,
+    });
+  }
+
+  function percentile(values, pct) {
+    const clean = values.filter((v) => v !== null && v !== undefined).sort((a, b) => a - b);
+    if (!clean.length) return null;
+    return clean[Math.min(clean.length - 1, Math.ceil((pct / 100) * clean.length) - 1)];
+  }
+
+  function renderLatencyChart() {
+    const resolution = state.dataset.resolution || 60;
+    const { names, xs, columns } = align(state.dataset.latency, "rtt", resolution);
+    const sorted = orderByManifest(names);
+
+    // A handful of 200 ms spikes would otherwise squash the everyday 10 ms band
+    // into a flat line, so clip the axis and say so rather than hiding the shape.
+    const flat = columns.flat();
+    const p995 = percentile(flat, 99.5) || 10;
+    const peak = Math.max(...flat.filter((v) => v !== null), 10);
+    const clipped = peak > p995 * 1.6;
+    const top = clipped ? p995 * 1.3 : peak * 1.15;
+
+    $("#latency-note").textContent = clipped
+      ? `Axis clipped at ${fmtNum(top, 0)} ms — ${fmtNum(peak, 0)} ms peak. Hover for exact values.`
+      : "";
+
+    makeChart("#chart-latency", "#legend-latency", {
+      key: "latency",
+      xs,
+      series: sorted.map(({ name }) => ({ label: name, colour: targetColour(name) })),
+      columns: sorted.map(({ index }) => columns[index]),
+      yLabel: "ms",
+      unit: " ms",
+      digits: 1,
+      height: 300,
+      range: [0, Math.max(10, top)],
+    });
+  }
+
+  function renderLossChart() {
+    const resolution = state.dataset.resolution || 60;
+    const { names, xs, columns } = align(state.dataset.latency, "loss", resolution);
+    const sorted = orderByManifest(names);
+    makeChart("#chart-loss", "#legend-loss", {
+      key: "loss",
+      xs,
+      series: sorted.map(({ name }) => ({ label: name, colour: targetColour(name) })),
+      columns: sorted.map(({ index }) => columns[index]),
+      yLabel: "% lost",
+      unit: "%",
+      digits: 1,
+      height: 200,
+      range: [0, 100],
+    });
+  }
+
+  function renderTtfbChart() {
+    const names = Object.keys(state.dataset.http || {});
+    const panel = $("#ttfb-panel");
+    if (!names.length) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const resolution = state.dataset.resolution || 60;
+    const { names: ordered, xs, columns } = align(state.dataset.http, "ttfb", resolution);
+    const sorted = orderByManifest(ordered);
+    makeChart("#chart-ttfb", "#legend-ttfb", {
+      key: "ttfb",
+      xs,
+      series: sorted.map(({ name }) => ({ label: name, colour: targetColour(name) })),
+      columns: sorted.map(({ index }) => columns[index]),
+      yLabel: "ms",
+      unit: " ms",
+      digits: 0,
+      height: 220,
+      range: (_u, _min, max) => [0, Math.max(100, max * 1.15)],
+    });
+  }
+
+  /** Every non-LAN target unreachable at the same timestamp. If the router was
+   * unreachable too, this machine lost its own network ("local"), which says
+   * nothing about the line; otherwise it is an internet outage. */
+  function computeOutages() {
+    if (state.dataset.outages) {
+      const cutoff = RANGES[state.range].hours
+        ? Math.floor(Date.now() / 1000) - RANGES[state.range].hours * 3600
+        : 0;
+      return state.dataset.outages.filter((o) => o.end >= cutoff);
+    }
+
+    const icmp = (state.manifest.targets || []).filter((t) => (t.checks || []).includes("icmp"));
+    const wan = icmp.filter((t) => t.group !== "lan").map((t) => t.name);
+    const lan = icmp.filter((t) => t.group === "lan").map((t) => t.name);
+    if (!wan.length) return [];
+
+    const resolution = state.dataset.resolution || 60;
+    const byTime = new Map();
+    for (const name of wan) {
+      const series = state.dataset.latency[name];
+      if (!series) continue;
+      series.t.forEach((t, i) => {
+        const snapped = Math.round(t / resolution) * resolution;
+        const entry = byTime.get(snapped) || { total: 0, dead: 0 };
+        entry.total += 1;
+        if (series.loss[i] >= 100) entry.dead += 1;
+        byTime.set(snapped, entry);
+      });
+    }
+    for (const name of lan) {
+      const series = state.dataset.latency[name];
+      if (!series) continue;
+      series.t.forEach((t, i) => {
+        const snapped = Math.round(t / resolution) * resolution;
+        const entry = byTime.get(snapped);
+        if (!entry) return;
+        entry.lanTotal = (entry.lanTotal || 0) + 1;
+        if (series.loss[i] >= 100) entry.lanDead = (entry.lanDead || 0) + 1;
+      });
+    }
+
+    const times = [...byTime.keys()].sort((a, b) => a - b);
+    const outages = [];
+    let current = null;
+    for (const t of times) {
+      const entry = byTime.get(t);
+      const down = entry.total > 0 && entry.dead === entry.total;
+      const kind = entry.lanTotal && entry.lanDead === entry.lanTotal ? "local" : "internet";
+      if (down) {
+        if (current && current.kind === kind && t - current.end <= resolution * 2) current.end = t;
+        else {
+          if (current) outages.push(current);
+          current = { start: t, end: t, kind };
+        }
+      } else if (current) {
+        outages.push(current);
+        current = null;
+      }
+    }
+    if (current) outages.push(current);
+    return outages.map((o) => ({ ...o, seconds: o.end - o.start + resolution }));
+  }
+
+  function renderOutages() {
+    const outages = computeOutages().reverse();
+    const body = $("#outages-table").querySelector("tbody");
+    body.innerHTML = "";
+    $("#outages-empty").hidden = outages.length > 0;
+    $("#outages-table").hidden = outages.length === 0;
+    for (const outage of outages.slice(0, 50)) {
+      const row = el("tr");
+      const local = outage.kind === "local";
+      const type = el("td", local ? "muted" : null, local ? "Local network" : "Internet");
+      type.title = local
+        ? "The router was unreachable too: this machine lost its own connection, not the line"
+        : "Every internet target unreachable while the router still answered";
+      row.append(
+        type,
+        el("td", null, fmtDateTime(outage.start)),
+        el("td", null, fmtDateTime(outage.end)),
+        el("td", null, fmtDuration(outage.seconds))
+      );
+      body.appendChild(row);
+    }
+  }
+
+  function renderTestsTable() {
+    const speed = state.dataset.speed;
+    const body = $("#tests-table").querySelector("tbody");
+    body.innerHTML = "";
+    const count = (speed.t || []).length;
+    for (let i = count - 1; i >= Math.max(0, count - 20); i--) {
+      const row = el("tr");
+      const result = el("td");
+      if (speed.url && speed.url[i]) {
+        const link = el("a", null, "view");
+        link.href = speed.url[i];
+        link.rel = "noopener";
+        link.target = "_blank";
+        result.appendChild(link);
+      } else if (speed.error && speed.error[i]) {
+        result.textContent = "failed";
+        result.title = speed.error[i];
+      } else {
+        result.textContent = "—";
+      }
+      row.append(
+        el("td", null, fmtDateTime(speed.t[i])),
+        el("td", null, engineLabel(speed.engine && speed.engine[i])),
+        el("td", "num", fmtNum(speed.down ? speed.down[i] : null, 1)),
+        el("td", "num", fmtNum(speed.up ? speed.up[i] : null, 1)),
+        el("td", "num", fmtNum(speed.ping ? speed.ping[i] : null, 1)),
+        el("td", "num", fmtNum(speed.jitter ? speed.jitter[i] : null, 1)),
+        el("td", null, (speed.server && speed.server[i]) || "—"),
+        result
+      );
+      body.appendChild(row);
+    }
+  }
+
+  function renderTargets() {
+    const body = $("#targets-table").querySelector("tbody");
+    body.innerHTML = "";
+    for (const target of state.manifest.targets || []) {
+      const row = el("tr");
+      row.append(
+        el("td", null, target.name + (target.primary ? " ★" : "")),
+        el("td", null, target.host),
+        el("td", null, target.group || "internet"),
+        el("td", null, (target.checks || []).join(", "))
+      );
+      body.appendChild(row);
+    }
+  }
+
+  // ------------------------------------------------------ on-demand tests
+  // The page never talks to a collector (they accept no connections). It starts
+  // the repository's run-test workflow, which leaves a request on the `control`
+  // branch; the collector fetches that every minute, runs the test, and lists
+  // the request id under on_demand in its next manifest. See collector/control.py.
+  const TOKEN_KEY = "bb-gh-token";
+  const PENDING_KEY = "bb-run-pending";
+  const RUN_WATCH_MS = 15 * 1000;
+  const RUN_GIVE_UP_S = 20 * 60;
+  const TEST_LABELS = {
+    speed: "Throughput",
+    latency: "Latency sweep",
+    both: "Throughput + latency",
+  };
+  const OUTCOMES = {
+    ok: ["s-good", "done"],
+    failed: ["s-critical", "failed"],
+    running: ["s-warning", "running"],
+    expired: ["s-warning", "expired before the collector saw it"],
+    superseded: ["s-good", "covered by a newer request"],
+    skipped: ["s-warning", "skipped"],
+  };
+  let runTimer = null;
+
+  const stored = (area, key) => {
+    try {
+      return area.getItem(key);
+    } catch (_) {
+      return null;
+    }
+  };
+  const store = (area, key, value) => {
+    try {
+      if (value === null) area.removeItem(key);
+      else area.setItem(key, value);
+    } catch (_) {
+      /* storage unavailable — works for this page view only */
+    }
+  };
+  const setRunStatus = (text, cls) => {
+    const node = $("#run-status");
+    node.textContent = text;
+    node.className = `run-status ${cls || "muted"}`;
+  };
+  const collectorLabel = (id) => {
+    const c = state.collectors.find((x) => x.id === id);
+    return (c && c.label) || id;
+  };
+
+  function renderRunPanel() {
+    const ctl = state.manifest.control;
+    const panel = $("#run-panel");
+    panel.hidden = !ctl;
+    if (!ctl) return;
+
+    const host = state.manifest.host || {};
+    panel.querySelector(".run-who").textContent = host.label || state.manifest.id;
+    panel.querySelectorAll(".run-repo").forEach((node) => {
+      node.textContent = ctl.repo;
+    });
+
+    const select = $("#run-engine");
+    const keep = select.value;
+    select.innerHTML = "";
+    const option = (value, text) => {
+      const node = el("option", null, text);
+      node.value = value;
+      select.appendChild(node);
+    };
+    option("auto", "Next in rotation");
+    for (const engine of ctl.engines || []) option(engine, engineLabel(engine));
+    select.value = [...select.options].some((o) => o.value === keep) ? keep : "auto";
+    $("#run-engine-wrap").hidden = $("#run-test").value === "latency";
+
+    refreshTokenUi();
+    renderRunHistory();
+    const pending = JSON.parse(stored(sessionStorage, PENDING_KEY) || "null");
+    if (pending && !runTimer) watchRun(pending);
+  }
+
+  function refreshTokenUi() {
+    const has = Boolean(stored(localStorage, TOKEN_KEY));
+    $("#run-token").value = "";
+    $("#run-token").placeholder = has ? "Token saved — paste a new one to replace it" : "github_pat_…";
+    $("#run-token-forget").hidden = !has;
+    $("#run-go").textContent = has ? "Run now" : "Run on GitHub…";
+  }
+
+  function renderRunHistory() {
+    const box = $("#run-history");
+    box.innerHTML = "";
+    const list = state.manifest.on_demand || [];
+    if (!list.length) return;
+    box.appendChild(el("h3", null, "Recent requests"));
+    const ul = el("ul");
+    for (const r of list) {
+      const [cls, word] = OUTCOMES[r.outcome] || ["s-warning", r.outcome];
+      const li = el("li");
+      const status = el("span", `tile-status ${cls}`);
+      status.append(el("span", "dot"), el("span", null, word));
+      const what = `${TEST_LABELS[r.test] || r.test}${r.engine ? ` · ${engineLabel(r.engine)}` : ""}`;
+      const when = `requested ${relative(r.requested_at)}${r.by ? ` by ${r.by}` : ""}`;
+      li.append(el("strong", null, what), status, el("span", "muted", when));
+      if (r.detail) li.appendChild(el("span", "muted run-detail", r.detail));
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  }
+
+  function explainDispatchError(status, message, repo) {
+    if (status === 401) return "GitHub rejected the token — it may have expired or been mistyped.";
+    if (status === 403)
+      return `The token is not allowed to start workflows on ${repo}. Give it Actions: Read and write.`;
+    if (status === 404)
+      return `GitHub could not find the run-test workflow on ${repo}, or the token cannot see that repository.`;
+    return `GitHub refused the request (HTTP ${status}${message ? `: ${message}` : ""}).`;
+  }
+
+  async function submitRun(event) {
+    event.preventDefault();
+    const ctl = state.manifest.control;
+    if (!ctl) return;
+    const collector = state.manifest.id;
+    const test = $("#run-test").value;
+    const engine = test === "latency" ? "auto" : $("#run-engine").value;
+    const token = stored(localStorage, TOKEN_KEY);
+
+    if (!token) {
+      window.open(`https://github.com/${ctl.repo}/actions/workflows/${ctl.workflow}`, "_blank", "noopener");
+      setRunStatus(
+        `On GitHub, choose “Run workflow” and enter collector “${collector}”, test “${test}”` +
+          (engine !== "auto" ? `, engine “${engine}”` : "") +
+          ". Or set up one-click runs below to start it from here."
+      );
+      return;
+    }
+
+    const id = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const go = $("#run-go");
+    go.disabled = true;
+    setRunStatus("Sending the request to GitHub…");
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${ctl.repo}/actions/workflows/${encodeURIComponent(ctl.workflow)}/dispatches`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+          body: JSON.stringify({ ref: ctl.ref, inputs: { collector, test, engine, request_id: id } }),
+        }
+      );
+      if (res.status !== 204) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(explainDispatchError(res.status, body.message, ctl.repo));
+      }
+    } catch (error) {
+      go.disabled = false;
+      setRunStatus(error.message || "Could not reach GitHub.", "s-critical");
+      return;
+    }
+    const pending = { id, collector, test, at: Math.floor(Date.now() / 1000) };
+    store(sessionStorage, PENDING_KEY, JSON.stringify(pending));
+    watchRun(pending);
+  }
+
+  /** Poll the collector's manifest until it reports the request handled. */
+  function watchRun(pending) {
+    clearInterval(runTimer);
+    $("#run-go").disabled = true;
+    const who = collectorLabel(pending.collector);
+    const finish = (text, cls) => {
+      clearInterval(runTimer);
+      runTimer = null;
+      store(sessionStorage, PENDING_KEY, null);
+      $("#run-go").disabled = false;
+      setRunStatus(text, cls);
+    };
+
+    const tick = async () => {
+      const age = Math.floor(Date.now() / 1000) - pending.at;
+      let manifest = null;
+      try {
+        manifest = await fetchJSON(`${ROOT}/${pending.collector}/manifest.json`);
+      } catch (_) {
+        /* mid-deploy — try again next tick */
+      }
+      const hit = manifest && (manifest.on_demand || []).find((r) => r.id === pending.id);
+      if (hit && hit.outcome !== "running") {
+        const [cls, word] = OUTCOMES[hit.outcome] || ["s-warning", hit.outcome];
+        finish(`${TEST_LABELS[hit.test] || hit.test} on ${who}: ${word}${hit.detail ? ` — ${hit.detail}` : ""}.`, cls);
+        if (pending.collector === state.collectorId) await loadCollector();
+        return;
+      }
+      if (age > RUN_GIVE_UP_S) {
+        finish(
+          `No result from ${who} after ${fmtDuration(age)}. Check that its control timer is ` +
+            "running and that it can still publish.",
+          "s-critical"
+        );
+        return;
+      }
+      const phase =
+        age < 45
+          ? "GitHub is queuing the request"
+          : age < 150
+          ? "the collector picks requests up within a minute, then runs the test"
+          : "running the test and publishing; GitHub Pages takes a minute or two to update";
+      setRunStatus(`Requested ${fmtDuration(age)} ago — ${phase}…`, "s-warning");
+    };
+    tick();
+    runTimer = setInterval(tick, RUN_WATCH_MS);
+  }
+
+  function initRunPanel() {
+    $("#run-form").addEventListener("submit", submitRun);
+    $("#run-test").addEventListener("change", () => {
+      $("#run-engine-wrap").hidden = $("#run-test").value === "latency";
+    });
+    $("#run-token-save").addEventListener("click", () => {
+      const value = $("#run-token").value.trim();
+      if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(value)) {
+        setRunStatus("That does not look like a GitHub token (github_pat_… or ghp_…).", "s-critical");
+        return;
+      }
+      store(localStorage, TOKEN_KEY, value);
+      refreshTokenUi();
+      $("#run-setup").open = false;
+      setRunStatus("Token saved in this browser. Run now starts the test directly.", "s-good");
+    });
+    $("#run-token-forget").addEventListener("click", () => {
+      store(localStorage, TOKEN_KEY, null);
+      refreshTokenUi();
+      setRunStatus("Token removed from this browser.");
+    });
+  }
+
+  function renderAll() {
+    for (const { chart } of state.charts) chart.destroy();
+    state.charts = [];
+    renderSpeedChart();
+    renderLanChart();
+    renderLatencyChart();
+    renderLossChart();
+    renderTtfbChart();
+    renderOutages();
+    renderTestsTable();
+  }
+
+  async function setRange(rangeKey) {
+    state.range = rangeKey;
+    for (const button of document.querySelectorAll("#range-buttons button")) {
+      button.classList.toggle("active", button.dataset.range === rangeKey);
+    }
+    $("#range-note").textContent = "Loading…";
+    try {
+      state.dataset = await loadDataset(rangeKey);
+    } catch (error) {
+      $("#range-note").textContent = `Could not load data: ${error.message}`;
+      return;
+    }
+    const resolution = state.dataset.resolution;
+    $("#range-note").textContent =
+      resolution >= 3600
+        ? `Hourly averages · ${(state.dataset.speed.t || []).length} throughput tests`
+        : `${Math.round(resolution / 60)}-minute resolution · ${
+            (state.dataset.speed.t || []).length
+          } throughput tests`;
+    renderAll();
+  }
+
+  // ----------------------------------------------------------------- theme
+  function applyTheme(theme) {
+    if (theme) document.documentElement.setAttribute("data-theme", theme);
+    else document.documentElement.removeAttribute("data-theme");
+    try {
+      if (theme) localStorage.setItem("bb-theme", theme);
+      else localStorage.removeItem("bb-theme");
+    } catch (_) {
+      /* storage unavailable — theme is per-session only */
+    }
+  }
+
+  function initTheme() {
+    let stored = null;
+    try {
+      stored = localStorage.getItem("bb-theme");
+    } catch (_) {
+      stored = null;
+    }
+    if (stored) applyTheme(stored);
+    $("#theme-toggle").addEventListener("click", () => {
+      const isDark =
+        document.documentElement.getAttribute("data-theme") === "dark" ||
+        (!document.documentElement.getAttribute("data-theme") &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches);
+      applyTheme(isDark ? "light" : "dark");
+      if (state.dataset) renderAll();
+    });
+  }
+
+  // ------------------------------------------------------------ collectors
+  async function loadCollectors() {
+    try {
+      const index = await fetchJSON(`${ROOT}/collectors.json`);
+      return (index.collectors || []).filter((c) => c && c.id);
+    } catch (_) {
+      return []; // published before collectors had their own folders
+    }
+  }
+
+  function pickCollector(list) {
+    let stored = null;
+    try {
+      stored = localStorage.getItem("bb-collector");
+    } catch (_) {
+      stored = null;
+    }
+    const fromHash = decodeURIComponent(location.hash.slice(1));
+    for (const id of [fromHash, stored]) {
+      if (id && list.some((c) => c.id === id)) return id;
+    }
+    return list[0].id; // the publisher lists wired collectors first
+  }
+
+  function renderCollectorSwitch() {
+    const box = $("#collector-switch");
+    box.innerHTML = "";
+    box.hidden = state.collectors.length < 2;
+    for (const c of state.collectors) {
+      const button = el("button");
+      button.type = "button";
+      button.setAttribute("aria-pressed", String(c.id === state.collectorId));
+      button.append(
+        el("span", "conn", CONNECTION_LABELS[c.connection] || "Collector"),
+        el("span", "who", c.label)
+      );
+      button.title = c.generated_at
+        ? `${c.label} — last published ${relative(c.generated_at)}`
+        : c.label;
+      button.addEventListener("click", () => switchCollector(c.id));
+      box.appendChild(button);
+    }
+  }
+
+  async function switchCollector(id) {
+    if (id === state.collectorId || !state.collectors.some((c) => c.id === id)) return;
+    state.collectorId = id;
+    try {
+      localStorage.setItem("bb-collector", id);
+    } catch (_) {
+      /* not remembered — the URL hash still is */
+    }
+    history.replaceState(null, "", `#${encodeURIComponent(id)}`);
+    renderCollectorSwitch();
+    await loadCollector();
+  }
+
+  function describeMethod(host) {
+    const who = host.label || "a dedicated collector";
+    if (host.connection === "wifi") {
+      return (
+        `These figures were measured over Wi-Fi by ${who}, so they include the wireless ` +
+        "link: a shortfall here is not by itself evidence of a line fault."
+      );
+    }
+    if (host.connection === "wired") {
+      return (
+        `These figures are wired-to-router measurements from ${who}; Wi-Fi speeds ` +
+        "will be lower and are not evidence of a line fault."
+      );
+    }
+    return `These figures are measurements from ${who}.`;
+  }
+
+  /** Fetch and draw everything for the selected collector. */
+  async function loadCollector() {
+    DATA = state.collectorId ? `${ROOT}/${state.collectorId}` : ROOT;
+    try {
+      const [manifest, summary] = await Promise.all([
+        fetchJSON(`${DATA}/manifest.json`),
+        fetchJSON(`${DATA}/summary.json`),
+      ]);
+      state.manifest = manifest;
+      state.summary = summary;
+    } catch (error) {
+      if (state.manifest) {
+        $("#generated").textContent = `Could not load this collector (${error.message}).`;
+        return false;
+      }
+      $("#generated").textContent = "No data published yet.";
+      $("#tiles").appendChild(
+        el("p", "muted", `Waiting for the collector's first publish (${error.message}).`)
+      );
+      return false;
+    }
+
+    state.retired = new Map();
+    state.tz = state.manifest.site.timezone || "UTC";
+    document.title = state.manifest.site.title || document.title;
+    $("#site-title").textContent = state.manifest.site.title || "Home Broadband Monitor";
+    $("#site-subtitle").textContent = state.manifest.site.subtitle || "";
+    const host = state.manifest.host || {};
+    // Older collectors published no label; keep the generic wording then.
+    if (host.label) {
+      document.querySelectorAll(".collector-name").forEach((node) => {
+        node.textContent = host.label;
+      });
+    }
+    $("#sla-method").textContent = describeMethod(host);
+    $("#generated").textContent = `Updated ${fmtDateTime(state.manifest.generated_at)} · ${relative(
+      state.manifest.generated_at
+    )}`;
+
+    renderTiles();
+    renderSLA();
+    renderTargets();
+    renderRunPanel();
+    await setRange(state.range);
+    return true;
+  }
+
+  // ------------------------------------------------------------------ boot
+  async function boot() {
+    initTheme();
+    initRunPanel();
+
+    state.collectors = await loadCollectors();
+    if (state.collectors.length) state.collectorId = pickCollector(state.collectors);
+    renderCollectorSwitch();
+    if (!(await loadCollector())) return;
+
+    for (const button of document.querySelectorAll("#range-buttons button")) {
+      button.addEventListener("click", () => setRange(button.dataset.range));
+    }
+    window.addEventListener("hashchange", () =>
+      switchCollector(decodeURIComponent(location.hash.slice(1)))
+    );
+
+    let resizeTimer;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(resizeCharts, 120);
+    });
+
+    // Pick up a new publish without a manual refresh. The URL hash and
+    // localStorage keep the reloaded page on the same collector.
+    setInterval(async () => {
+      try {
+        const manifest = await fetchJSON(`${DATA}/manifest.json`);
+        if (manifest.generated_at !== state.manifest.generated_at) location.reload();
+      } catch (_) {
+        /* offline or mid-deploy — try again next tick */
+      }
+    }, 5 * 60 * 1000);
+  }
+
+  document.addEventListener("DOMContentLoaded", boot);
+})();
